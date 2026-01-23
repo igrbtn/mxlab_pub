@@ -1,0 +1,1961 @@
+#!/usr/bin/env python3
+"""
+MXLab - Email Deliverability & DNS Analysis Tool
+A comprehensive mail-tester.com alternative for analyzing email configuration.
+
+Features:
+- Dynamic test email generation
+- SPF, DKIM, DMARC verification
+- MX record analysis with IP resolution
+- SMTP connectivity testing
+- Autodiscover configuration checking
+- Blacklist monitoring
+- Real-time streaming results
+
+License: MIT
+"""
+
+import asyncio
+import uuid
+import json
+import socket
+import re
+import os
+import ssl
+import smtplib
+import aiohttp
+from datetime import datetime, timedelta
+from email import policy
+from email.parser import BytesParser
+from threading import Thread
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+
+from flask import Flask, render_template, jsonify, request
+from aiosmtpd.controller import Controller
+from aiosmtpd.smtp import SMTP as SMTPServer
+
+# Try to import optional analysis libraries
+try:
+    import dns.resolver
+    DNS_AVAILABLE = True
+except ImportError:
+    DNS_AVAILABLE = False
+
+try:
+    import dkim
+    DKIM_AVAILABLE = True
+except ImportError:
+    DKIM_AVAILABLE = False
+
+# Configuration from environment variables
+SMTP_PORT = int(os.environ.get('SMTP_PORT', 25))
+WEB_PORT = int(os.environ.get('WEB_PORT', 5000))
+DOMAIN = os.environ.get('DOMAIN', 'localhost')
+
+# Telegram notification configuration (optional)
+# Set these environment variables to enable Telegram notifications
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+
+
+async def send_telegram_notification(test_id, email_data, analysis):
+    """Send silent notification to Telegram about received email."""
+    # Skip if Telegram not configured
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        score = analysis.get('score', 0)
+        sender = email_data.get('from', 'Unknown')
+        subject = email_data.get('subject', '(No Subject)')
+        peer = email_data.get('peer', [])
+        sender_ip = peer[0] if peer else 'Unknown'
+        sender_port = peer[1] if len(peer) > 1 else ''
+
+        # Emoji based on score
+        if score >= 9:
+            emoji = "✅"
+            status = "EXCELLENT"
+        elif score >= 7:
+            emoji = "👍"
+            status = "GOOD"
+        elif score >= 5:
+            emoji = "⚠️"
+            status = "FAIR"
+        else:
+            emoji = "❌"
+            status = "POOR"
+
+        message = f"""{emoji} <b>MXtest Email Analysis</b>
+
+<b>Score:</b> {score:.1f}/10 — {status}
+<b>From:</b> <code>{sender}</code>
+<b>Subject:</b> {subject}
+<b>Sender IP:</b> <code>{sender_ip}</code>{f' (port {sender_port})' if sender_port else ''}
+<b>Test ID:</b> <code>{test_id}</code>
+
+🔗 <a href="https://{DOMAIN}/#/results/{test_id}">View Results</a>"""
+
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            'chat_id': TELEGRAM_CHAT_ID,
+            'text': message,
+            'parse_mode': 'HTML',
+            'disable_notification': True,
+            'disable_web_page_preview': True
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as response:
+                if response.status == 200:
+                    print(f"[TELEGRAM] Notification sent for test_id: {test_id}")
+                else:
+                    print(f"[TELEGRAM] Failed to send notification: {response.status}")
+    except Exception as e:
+        print(f"[TELEGRAM] Error sending notification: {e}")
+
+
+async def send_telegram_report_notification(domain, summary, client_ip):
+    """Send silent notification to Telegram about MXlab Lookup."""
+    # Skip if Telegram not configured
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        score = summary.get('score', 0)
+        passed = summary.get('passed', 0)
+        warnings = summary.get('warnings', 0)
+        errors = summary.get('errors', 0)
+
+        # Emoji and status based on score
+        if score >= 90:
+            emoji = "✅"
+            status = "EXCELLENT"
+        elif score >= 75:
+            emoji = "👍"
+            status = "GOOD"
+        elif score >= 60:
+            emoji = "👌"
+            status = "FAIR"
+        elif score >= 40:
+            emoji = "⚠️"
+            status = "POOR"
+        else:
+            emoji = "❌"
+            status = "CRITICAL"
+
+        message = f"""{emoji} <b>MXlab Domain Report</b>
+
+<b>Domain:</b> <code>{domain}</code>
+<b>Score:</b> {score}/100 — {status}
+<b>Results:</b> ✅ {passed} | ⚠️ {warnings} | ❌ {errors}
+<b>Client IP:</b> <code>{client_ip}</code>"""
+
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            'chat_id': TELEGRAM_CHAT_ID,
+            'text': message,
+            'parse_mode': 'HTML',
+            'disable_notification': True,
+            'disable_web_page_preview': True
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as response:
+                if response.status == 200:
+                    print(f"[TELEGRAM] Report notification sent for domain: {domain}")
+                else:
+                    print(f"[TELEGRAM] Failed to send report notification: {response.status}")
+    except Exception as e:
+        print(f"[TELEGRAM] Error sending report notification: {e}")
+
+# Storage for emails and test addresses
+emails_store = {}  # {test_id: {email_data, analysis, timestamp}}
+test_addresses = {}  # {test_id: {email, created, expires}}
+
+# Thread pool for async operations
+executor = ThreadPoolExecutor(max_workers=10)
+
+# RFC Tips and References
+RFC_TIPS = {
+    'mx': {
+        'rfc': 'RFC 5321',
+        'title': 'Simple Mail Transfer Protocol',
+        'tip': 'MX records specify mail servers for your domain. Without MX records, mail servers will fall back to A records.',
+        'fix': 'Add MX records pointing to your mail server(s) with appropriate priorities (lower = higher priority).'
+    },
+    'spf': {
+        'rfc': 'RFC 7208',
+        'title': 'Sender Policy Framework (SPF)',
+        'tip': 'SPF allows domain owners to specify which mail servers are authorized to send email on behalf of their domain.',
+        'fix': 'Add a TXT record starting with "v=spf1" listing authorized sending IPs/domains. End with "-all" (hard fail) or "~all" (soft fail).'
+    },
+    'dkim': {
+        'rfc': 'RFC 6376',
+        'title': 'DomainKeys Identified Mail (DKIM)',
+        'tip': 'DKIM adds a digital signature to emails that receiving servers can verify using DNS public key.',
+        'fix': 'Configure your mail server to sign outgoing emails and publish the public key as a TXT record at selector._domainkey.domain.'
+    },
+    'dmarc': {
+        'rfc': 'RFC 7489',
+        'title': 'Domain-based Message Authentication (DMARC)',
+        'tip': 'DMARC builds on SPF and DKIM, telling receivers how to handle authentication failures.',
+        'fix': 'Add a TXT record at _dmarc.domain with policy (p=none/quarantine/reject) and reporting addresses (rua/ruf).'
+    },
+    'ptr': {
+        'rfc': 'RFC 1912',
+        'title': 'Reverse DNS (PTR Record)',
+        'tip': 'PTR records map IP addresses to hostnames. Many mail servers reject mail from IPs without valid PTR.',
+        'fix': 'Contact your ISP/hosting provider to set up reverse DNS for your mail server IP.'
+    },
+    'a': {
+        'rfc': 'RFC 1035',
+        'title': 'Domain Names - A Records',
+        'tip': 'A records map domain names to IPv4 addresses.',
+        'fix': 'Add A records pointing your domain/subdomain to the correct IP address.'
+    },
+    'aaaa': {
+        'rfc': 'RFC 3596',
+        'title': 'DNS Extensions for IPv6 (AAAA)',
+        'tip': 'AAAA records map domain names to IPv6 addresses for dual-stack connectivity.',
+        'fix': 'Add AAAA records if your server supports IPv6. Not mandatory but recommended.'
+    },
+    'ns': {
+        'rfc': 'RFC 1035',
+        'title': 'Name Server Records',
+        'tip': 'NS records delegate a DNS zone to authoritative name servers.',
+        'fix': 'Ensure NS records point to reliable, geographically distributed name servers.'
+    },
+    'smtp': {
+        'rfc': 'RFC 5321',
+        'title': 'SMTP Protocol',
+        'tip': 'SMTP servers should respond to EHLO/HELO commands and support standard ports (25, 587, 465).',
+        'fix': 'Ensure your mail server is accessible on port 25, responds to EHLO, and has valid SSL/TLS on port 465/587.'
+    },
+    'starttls': {
+        'rfc': 'RFC 3207',
+        'title': 'SMTP STARTTLS Extension',
+        'tip': 'STARTTLS upgrades plain SMTP connections to encrypted TLS.',
+        'fix': 'Configure your mail server to advertise and support STARTTLS on port 25 and 587.'
+    },
+    'autodiscover': {
+        'rfc': 'MS-OXDSCLI',
+        'title': 'Outlook Autodiscover',
+        'tip': 'Autodiscover helps email clients automatically configure account settings.',
+        'fix': 'Configure autodiscover.domain.com or SRV record _autodiscover._tcp.domain pointing to your autodiscover service.'
+    },
+    'blacklist': {
+        'rfc': 'RFC 5782',
+        'title': 'DNS-Based Blacklists',
+        'tip': 'Being listed on blacklists causes email delivery failures.',
+        'fix': 'Check each blacklist for delisting procedures. Fix underlying issues (spam, open relay, compromised accounts).'
+    },
+    'headers': {
+        'rfc': 'RFC 5322',
+        'title': 'Internet Message Format',
+        'tip': 'Email headers must include From, To, Date, and Message-ID for proper delivery.',
+        'fix': 'Ensure your mail server adds all required headers with correct formatting.'
+    }
+}
+
+app = Flask(__name__)
+
+
+def generate_test_id():
+    """Generate a unique test ID."""
+    return uuid.uuid4().hex[:12]
+
+
+def get_hostname():
+    """Get the server hostname from DOMAIN env var."""
+    return DOMAIN
+
+
+class MailHandler:
+    """Handle incoming emails."""
+
+    async def handle_RCPT(self, server, session, envelope, address, rcpt_options):
+        """Validate recipient address."""
+        # Extract test_id from email address (format: test_id@domain)
+        local_part = address.split('@')[0]
+        if local_part in test_addresses:
+            envelope.rcpt_tos.append(address)
+            return '250 OK'
+        # Accept all emails for testing purposes
+        envelope.rcpt_tos.append(address)
+        return '250 OK'
+
+    async def handle_DATA(self, server, session, envelope):
+        """Process received email."""
+        test_id = None
+
+        # Extract test_id from recipient
+        for rcpt in envelope.rcpt_tos:
+            local_part = rcpt.split('@')[0]
+            if local_part in test_addresses or len(local_part) == 12:
+                test_id = local_part
+                break
+
+        if not test_id:
+            test_id = generate_test_id()
+
+        # Parse email
+        parser = BytesParser(policy=policy.default)
+        msg = parser.parsebytes(envelope.content)
+
+        # Extract email data
+        email_data = {
+            'from': envelope.mail_from,
+            'to': envelope.rcpt_tos,
+            'subject': msg.get('Subject', '(No Subject)'),
+            'date': msg.get('Date', ''),
+            'message_id': msg.get('Message-ID', ''),
+            'headers': dict(msg.items()),
+            'body_plain': '',
+            'body_html': '',
+            'raw': envelope.content.decode('utf-8', errors='replace'),
+            'peer': session.peer,
+            'received_at': datetime.now().isoformat(),
+        }
+
+        # Extract body
+        if msg.is_multipart():
+            for part in msg.walk():
+                content_type = part.get_content_type()
+                if content_type == 'text/plain':
+                    email_data['body_plain'] = part.get_content()
+                elif content_type == 'text/html':
+                    email_data['body_html'] = part.get_content()
+        else:
+            content_type = msg.get_content_type()
+            content = msg.get_content()
+            if content_type == 'text/html':
+                email_data['body_html'] = content
+            else:
+                email_data['body_plain'] = content
+
+        # Perform analysis
+        analysis = await analyze_email(envelope, msg, session)
+
+        # Store email and analysis
+        emails_store[test_id] = {
+            'email': email_data,
+            'analysis': analysis,
+            'timestamp': datetime.now().isoformat()
+        }
+
+        print(f"[SMTP] Received email for test_id: {test_id}")
+
+        # Send async Telegram notification (non-blocking)
+        asyncio.create_task(send_telegram_notification(test_id, email_data, analysis))
+
+        return '250 Message accepted for delivery'
+
+
+async def analyze_email(envelope, msg, session):
+    """Analyze email for deliverability factors."""
+    analysis = {
+        'score': 10.0,  # Start with perfect score
+        'checks': [],
+        'warnings': [],
+        'errors': []
+    }
+
+    sender_domain = envelope.mail_from.split('@')[-1] if '@' in envelope.mail_from else ''
+
+    # 1. Check basic headers
+    required_headers = ['From', 'To', 'Subject', 'Date', 'Message-ID']
+    for header in required_headers:
+        if msg.get(header):
+            analysis['checks'].append({
+                'name': f'{header} Header',
+                'status': 'pass',
+                'message': f'{header} header is present'
+            })
+        else:
+            analysis['score'] -= 0.5
+            analysis['warnings'].append(f'Missing {header} header')
+            analysis['checks'].append({
+                'name': f'{header} Header',
+                'status': 'warning',
+                'message': f'{header} header is missing'
+            })
+
+    # 2. Check SPF (if DNS available)
+    if DNS_AVAILABLE and sender_domain:
+        spf_result = await check_spf(sender_domain, session.peer[0])
+        analysis['checks'].append(spf_result)
+        if spf_result['status'] == 'fail':
+            analysis['score'] -= 2.0
+            analysis['errors'].append('SPF check failed')
+        elif spf_result['status'] == 'warning':
+            analysis['score'] -= 1.0
+            analysis['warnings'].append('SPF record not found')
+
+    # 3. Check DKIM
+    dkim_result = check_dkim(envelope.content, msg)
+    analysis['checks'].append(dkim_result)
+    if dkim_result['status'] == 'fail':
+        analysis['score'] -= 2.0
+        analysis['errors'].append('DKIM verification failed')
+    elif dkim_result['status'] == 'warning':
+        analysis['score'] -= 1.0
+        analysis['warnings'].append('No DKIM signature found')
+
+    # 4. Check DMARC (if DNS available)
+    if DNS_AVAILABLE and sender_domain:
+        dmarc_result = await check_dmarc(sender_domain)
+        analysis['checks'].append(dmarc_result)
+        if dmarc_result['status'] == 'warning':
+            analysis['score'] -= 0.5
+            analysis['warnings'].append('No DMARC record found')
+
+    # 5. Check reverse DNS
+    if session.peer:
+        rdns_result = await check_reverse_dns(session.peer[0])
+        analysis['checks'].append(rdns_result)
+        if rdns_result['status'] == 'fail':
+            analysis['score'] -= 1.0
+            analysis['warnings'].append('No reverse DNS for sender IP')
+
+    # 6. Check for spam-like content
+    spam_check = check_spam_content(msg)
+    analysis['checks'].append(spam_check)
+    if spam_check['status'] == 'warning':
+        analysis['score'] -= spam_check.get('deduction', 0.5)
+        analysis['warnings'].append('Potential spam indicators found')
+
+    # 7. Check HTML/Plain text ratio
+    html_check = check_html_content(msg)
+    analysis['checks'].append(html_check)
+    if html_check['status'] == 'warning':
+        analysis['score'] -= 0.5
+        analysis['warnings'].append(html_check['message'])
+
+    # Ensure score doesn't go below 0
+    analysis['score'] = max(0, analysis['score'])
+
+    return analysis
+
+
+async def check_spf(domain, sender_ip):
+    """Check SPF record for the sender domain."""
+    try:
+        answers = dns.resolver.resolve(domain, 'TXT')
+        spf_record = None
+        for rdata in answers:
+            txt = str(rdata).strip('"')
+            if txt.startswith('v=spf1'):
+                spf_record = txt
+                break
+
+        if spf_record:
+            return {
+                'name': 'SPF Record',
+                'status': 'pass',
+                'message': f'SPF record found',
+                'record': spf_record
+            }
+        else:
+            return {
+                'name': 'SPF Record',
+                'status': 'warning',
+                'message': 'No SPF record found for sender domain'
+            }
+    except Exception as e:
+        return {
+            'name': 'SPF Record',
+            'status': 'warning',
+            'message': f'Could not check SPF: {str(e)}'
+        }
+
+
+def check_dkim(raw_email, msg):
+    """Check DKIM signature."""
+    dkim_header = msg.get('DKIM-Signature')
+
+    if not dkim_header:
+        return {
+            'name': 'DKIM Signature',
+            'status': 'warning',
+            'message': 'No DKIM signature found'
+        }
+
+    if DKIM_AVAILABLE:
+        try:
+            valid = dkim.verify(raw_email)
+            if valid:
+                return {
+                    'name': 'DKIM Signature',
+                    'status': 'pass',
+                    'message': 'DKIM signature is valid',
+                    'record': dkim_header[:100] + '...' if len(dkim_header) > 100 else dkim_header
+                }
+            else:
+                return {
+                    'name': 'DKIM Signature',
+                    'status': 'fail',
+                    'message': 'DKIM signature verification failed',
+                    'record': dkim_header[:100] + '...' if len(dkim_header) > 100 else dkim_header
+                }
+        except Exception as e:
+            return {
+                'name': 'DKIM Signature',
+                'status': 'warning',
+                'message': f'Could not verify DKIM: {str(e)}'
+            }
+    else:
+        return {
+            'name': 'DKIM Signature',
+            'status': 'pass',
+            'message': 'DKIM signature present (verification library not available)',
+            'record': dkim_header[:100] + '...' if len(dkim_header) > 100 else dkim_header
+        }
+
+
+async def check_dmarc(domain):
+    """Check DMARC record for the sender domain."""
+    try:
+        dmarc_domain = f'_dmarc.{domain}'
+        answers = dns.resolver.resolve(dmarc_domain, 'TXT')
+
+        for rdata in answers:
+            txt = str(rdata).strip('"')
+            if txt.startswith('v=DMARC1'):
+                return {
+                    'name': 'DMARC Record',
+                    'status': 'pass',
+                    'message': 'DMARC record found',
+                    'record': txt
+                }
+
+        return {
+            'name': 'DMARC Record',
+            'status': 'warning',
+            'message': 'No DMARC record found'
+        }
+    except Exception as e:
+        return {
+            'name': 'DMARC Record',
+            'status': 'warning',
+            'message': 'No DMARC record found'
+        }
+
+
+async def check_reverse_dns(ip):
+    """Check reverse DNS for sender IP."""
+    try:
+        hostname = socket.gethostbyaddr(ip)
+        return {
+            'name': 'Reverse DNS',
+            'status': 'pass',
+            'record': hostname[0],
+            'message': f'Reverse DNS: {hostname[0]}'
+        }
+    except:
+        return {
+            'name': 'Reverse DNS',
+            'status': 'fail',
+            'message': 'No reverse DNS found for sender IP'
+        }
+
+
+def check_spam_content(msg):
+    """Check for spam-like content."""
+    spam_indicators = []
+    subject = msg.get('Subject', '')
+    body = ''
+
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == 'text/plain':
+                try:
+                    body = part.get_content()
+                except:
+                    pass
+                break
+    else:
+        try:
+            body = msg.get_content()
+        except:
+            pass
+
+    content = f"{subject} {body}".lower()
+
+    # Common spam words
+    spam_words = ['free', 'winner', 'congratulations', 'urgent', 'act now',
+                  'limited time', 'click here', 'unsubscribe', 'buy now']
+
+    found_words = [word for word in spam_words if word in content]
+
+    if found_words:
+        return {
+            'name': 'Spam Content Check',
+            'status': 'warning',
+            'message': f'Found spam indicators: {", ".join(found_words[:3])}',
+            'deduction': min(len(found_words) * 0.3, 1.5)
+        }
+
+    return {
+        'name': 'Spam Content Check',
+        'status': 'pass',
+        'message': 'No obvious spam indicators found'
+    }
+
+
+def check_html_content(msg):
+    """Check HTML content quality."""
+    has_html = False
+    has_plain = False
+
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == 'text/plain':
+                has_plain = True
+            elif part.get_content_type() == 'text/html':
+                has_html = True
+    else:
+        content_type = msg.get_content_type()
+        has_plain = content_type == 'text/plain'
+        has_html = content_type == 'text/html'
+
+    if has_html and not has_plain:
+        return {
+            'name': 'HTML/Plain Text',
+            'status': 'warning',
+            'message': 'HTML email without plain text alternative'
+        }
+    elif has_html and has_plain:
+        return {
+            'name': 'HTML/Plain Text',
+            'status': 'pass',
+            'message': 'Both HTML and plain text versions present'
+        }
+    else:
+        return {
+            'name': 'HTML/Plain Text',
+            'status': 'pass',
+            'message': 'Plain text email'
+        }
+
+
+# Flask Routes
+
+@app.route('/')
+def index():
+    """Render main page."""
+    return render_template('index.html')
+
+
+@app.route('/api/generate', methods=['POST'])
+def generate_address():
+    """Generate a new test email address."""
+    test_id = generate_test_id()
+    hostname = get_hostname()
+    email = f"{test_id}@{hostname}"
+
+    test_addresses[test_id] = {
+        'email': email,
+        'created': datetime.now().isoformat(),
+        'expires': (datetime.now() + timedelta(hours=24)).isoformat()
+    }
+
+    return jsonify({
+        'test_id': test_id,
+        'email': email,
+        'smtp_port': SMTP_PORT,
+        'instructions': f'Send an email to {email} using SMTP port {SMTP_PORT}'
+    })
+
+
+@app.route('/api/check/<test_id>')
+def check_email(test_id):
+    """Check if email has been received and return analysis."""
+    if test_id in emails_store:
+        return jsonify({
+            'received': True,
+            'data': emails_store[test_id]
+        })
+    return jsonify({'received': False})
+
+
+@app.route('/api/results/<test_id>')
+def get_results(test_id):
+    """Get full results for a test."""
+    if test_id in emails_store:
+        return jsonify(emails_store[test_id])
+    return jsonify({'error': 'Not found'}), 404
+
+
+# MXlab Tools API endpoints
+
+@app.route('/api/tools/<tool>')
+def run_tool(tool):
+    """Run a DNS lookup tool."""
+    query = request.args.get('query', '').strip()
+
+    if not query:
+        return jsonify({'error': 'Query parameter is required'}), 400
+
+    if not DNS_AVAILABLE:
+        return jsonify({'error': 'DNS library not available'}), 500
+
+    tool_handlers = {
+        'mx': tool_mx_lookup,
+        'dns': tool_a_lookup,
+        'txt': tool_txt_lookup,
+        'spf': tool_spf_lookup,
+        'dkim': tool_dkim_lookup,
+        'dmarc': tool_dmarc_lookup,
+        'ptr': tool_ptr_lookup,
+        'blacklist': tool_blacklist_check,
+        'ns': tool_ns_lookup,
+        'soa': tool_soa_lookup,
+        'cname': tool_cname_lookup,
+        'aaaa': tool_aaaa_lookup,
+    }
+
+    handler = tool_handlers.get(tool)
+    if not handler:
+        return jsonify({'error': f'Unknown tool: {tool}'}), 400
+
+    try:
+        result = handler(query)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def tool_mx_lookup(domain):
+    """Look up MX records for a domain with IP resolution."""
+    try:
+        answers = dns.resolver.resolve(domain, 'MX')
+        records = []
+        for rdata in answers:
+            mx_host = str(rdata.exchange).rstrip('.')
+            record = {
+                'priority': rdata.preference,
+                'host': mx_host,
+                'ttl': answers.rrset.ttl,
+                'ips': [],
+                'ipv6': []
+            }
+            # Resolve A records for MX host
+            try:
+                a_answers = dns.resolver.resolve(mx_host, 'A')
+                record['ips'] = [str(r) for r in a_answers]
+            except:
+                pass
+            # Resolve AAAA records for MX host
+            try:
+                aaaa_answers = dns.resolver.resolve(mx_host, 'AAAA')
+                record['ipv6'] = [str(r) for r in aaaa_answers]
+            except:
+                pass
+            records.append(record)
+        records.sort(key=lambda x: x['priority'])
+        return {
+            'tool': 'MX Lookup',
+            'query': domain,
+            'status': 'success',
+            'records': records,
+            'count': len(records),
+            'command': f'dig {domain} MX +short'
+        }
+    except dns.resolver.NXDOMAIN:
+        return {'tool': 'MX Lookup', 'query': domain, 'status': 'error', 'message': 'Domain not found'}
+    except dns.resolver.NoAnswer:
+        return {'tool': 'MX Lookup', 'query': domain, 'status': 'warning', 'message': 'No MX records found'}
+    except Exception as e:
+        return {'tool': 'MX Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+
+
+def tool_a_lookup(domain):
+    """Look up A records for a domain."""
+    try:
+        answers = dns.resolver.resolve(domain, 'A')
+        records = [{'ip': str(rdata), 'ttl': answers.rrset.ttl} for rdata in answers]
+        return {
+            'tool': 'DNS (A) Lookup',
+            'query': domain,
+            'status': 'success',
+            'records': records,
+            'count': len(records),
+            'command': f'dig {domain} A +short'
+        }
+    except dns.resolver.NXDOMAIN:
+        return {'tool': 'DNS (A) Lookup', 'query': domain, 'status': 'error', 'message': 'Domain not found'}
+    except dns.resolver.NoAnswer:
+        return {'tool': 'DNS (A) Lookup', 'query': domain, 'status': 'warning', 'message': 'No A records found'}
+    except Exception as e:
+        return {'tool': 'DNS (A) Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+
+
+def tool_txt_lookup(domain):
+    """Look up TXT records for a domain."""
+    try:
+        answers = dns.resolver.resolve(domain, 'TXT')
+        records = []
+        for rdata in answers:
+            txt_value = str(rdata).strip('"')
+            records.append({'value': txt_value, 'ttl': answers.rrset.ttl})
+        return {
+            'tool': 'TXT Lookup',
+            'query': domain,
+            'status': 'success',
+            'records': records,
+            'count': len(records),
+            'command': f'dig {domain} TXT +short'
+        }
+    except dns.resolver.NXDOMAIN:
+        return {'tool': 'TXT Lookup', 'query': domain, 'status': 'error', 'message': 'Domain not found'}
+    except dns.resolver.NoAnswer:
+        return {'tool': 'TXT Lookup', 'query': domain, 'status': 'warning', 'message': 'No TXT records found'}
+    except Exception as e:
+        return {'tool': 'TXT Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+
+
+def tool_spf_lookup(domain, depth=0, checked_domains=None):
+    """Look up SPF record for a domain with include resolution."""
+    if checked_domains is None:
+        checked_domains = set()
+
+    if domain in checked_domains or depth > 10:
+        return None  # Prevent loops and too deep recursion
+
+    checked_domains.add(domain)
+
+    try:
+        answers = dns.resolver.resolve(domain, 'TXT')
+        spf_records = []
+        for rdata in answers:
+            txt_value = str(rdata).strip('"')
+            if txt_value.startswith('v=spf1'):
+                parsed = parse_spf_record(txt_value)
+                record = {
+                    'domain': domain,
+                    'value': txt_value,
+                    'ttl': answers.rrset.ttl,
+                    'parsed': parsed,
+                    'includes': []
+                }
+
+                # Check include: directives
+                for mechanism in parsed.get('mechanisms', []):
+                    if mechanism.startswith('include:'):
+                        include_domain = mechanism.replace('include:', '')
+                        include_result = tool_spf_lookup(include_domain, depth + 1, checked_domains)
+                        if include_result and include_result.get('records'):
+                            record['includes'].append({
+                                'domain': include_domain,
+                                'record': include_result['records'][0] if include_result['records'] else None
+                            })
+                        else:
+                            record['includes'].append({
+                                'domain': include_domain,
+                                'error': 'Could not resolve SPF'
+                            })
+                    elif mechanism.startswith('redirect='):
+                        redirect_domain = mechanism.replace('redirect=', '')
+                        redirect_result = tool_spf_lookup(redirect_domain, depth + 1, checked_domains)
+                        if redirect_result and redirect_result.get('records'):
+                            record['includes'].append({
+                                'domain': redirect_domain,
+                                'type': 'redirect',
+                                'record': redirect_result['records'][0] if redirect_result['records'] else None
+                            })
+
+                spf_records.append(record)
+
+        if spf_records:
+            return {
+                'tool': 'SPF Lookup',
+                'query': domain,
+                'status': 'success',
+                'records': spf_records,
+                'count': len(spf_records),
+                'lookup_count': len(checked_domains),
+                'command': f'dig {domain} TXT +short | grep spf'
+            }
+        else:
+            return {'tool': 'SPF Lookup', 'query': domain, 'status': 'warning', 'message': 'No SPF record found'}
+    except dns.resolver.NXDOMAIN:
+        return {'tool': 'SPF Lookup', 'query': domain, 'status': 'error', 'message': 'Domain not found'}
+    except dns.resolver.NoAnswer:
+        return {'tool': 'SPF Lookup', 'query': domain, 'status': 'warning', 'message': 'No SPF record found'}
+    except Exception as e:
+        return {'tool': 'SPF Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+
+
+def parse_spf_record(spf):
+    """Parse SPF record into components."""
+    parts = spf.split()
+    parsed = {'version': '', 'mechanisms': [], 'modifiers': [], 'includes': [], 'all': ''}
+    for part in parts:
+        if part.startswith('v='):
+            parsed['version'] = part
+        elif part.startswith('include:'):
+            parsed['includes'].append(part.replace('include:', ''))
+            parsed['mechanisms'].append(part)
+        elif part.endswith('all'):
+            parsed['all'] = part
+            parsed['mechanisms'].append(part)
+        elif part.startswith('+') or part.startswith('-') or part.startswith('~') or part.startswith('?'):
+            parsed['mechanisms'].append(part)
+        elif '=' in part:
+            parsed['modifiers'].append(part)
+        else:
+            parsed['mechanisms'].append(part)
+    return parsed
+
+
+def tool_dkim_lookup(query):
+    """Look up DKIM record for a domain. Query format: selector:domain or just domain.
+    When no selector specified, checks ALL common selectors and returns all found."""
+    if ':' in query:
+        selector, domain = query.split(':', 1)
+        # Single selector lookup
+        dkim_domain = f'{selector}._domainkey.{domain}'
+        try:
+            answers = dns.resolver.resolve(dkim_domain, 'TXT')
+            records = []
+            for rdata in answers:
+                txt_value = str(rdata).strip('"')
+                parsed = parse_dkim_record(txt_value)
+                records.append({
+                    'selector': selector,
+                    'domain': dkim_domain,
+                    'value': txt_value,
+                    'ttl': answers.rrset.ttl,
+                    'parsed': parsed
+                })
+            return {
+                'tool': 'DKIM Lookup',
+                'query': query,
+                'status': 'success',
+                'selectors_found': [selector],
+                'records': records,
+                'command': f'dig {dkim_domain} TXT +short'
+            }
+        except dns.resolver.NXDOMAIN:
+            return {'tool': 'DKIM Lookup', 'query': query, 'status': 'error', 'message': f'DKIM record not found for selector "{selector}"'}
+        except dns.resolver.NoAnswer:
+            return {'tool': 'DKIM Lookup', 'query': query, 'status': 'warning', 'message': f'No DKIM record for selector "{selector}"'}
+        except Exception as e:
+            return {'tool': 'DKIM Lookup', 'query': query, 'status': 'error', 'message': str(e)}
+
+    # No selector specified - check ALL common selectors and return all found
+    domain = query
+    common_selectors = [
+        'default', 'google', 'selector1', 'selector2', 'k1', 'k2', 's1', 's2',
+        'dkim', 'mail', 'email', 'smtp', 'mandrill', 'mailjet', 'sendgrid',
+        'amazonses', 'postmark', 'mailgun', 'sparkpost', 'mailchimp', 'cm',
+        'zendesk1', 'zendesk2', 'everlytickey1', 'everlytickey2', 'mxvault',
+        'protonmail', 'protonmail2', 'protonmail3'
+    ]
+
+    found_records = []
+    selectors_found = []
+    selectors_checked = []
+
+    for selector in common_selectors:
+        dkim_domain = f'{selector}._domainkey.{domain}'
+        selectors_checked.append({'selector': selector, 'domain': dkim_domain, 'found': False})
+        try:
+            answers = dns.resolver.resolve(dkim_domain, 'TXT')
+            for rdata in answers:
+                txt_value = str(rdata).strip('"')
+                if 'v=DKIM1' in txt_value or 'k=' in txt_value or 'p=' in txt_value:
+                    parsed = parse_dkim_record(txt_value)
+                    found_records.append({
+                        'selector': selector,
+                        'domain': dkim_domain,
+                        'value': txt_value,
+                        'ttl': answers.rrset.ttl,
+                        'parsed': parsed
+                    })
+                    selectors_found.append(selector)
+                    selectors_checked[-1]['found'] = True
+        except:
+            continue
+
+    if found_records:
+        return {
+            'tool': 'DKIM Lookup',
+            'query': query,
+            'status': 'success',
+            'selectors_found': selectors_found,
+            'selectors_checked': selectors_checked,
+            'records': found_records,
+            'count': len(found_records),
+            'message': f'Found {len(found_records)} DKIM record(s) with selectors: {", ".join(selectors_found)}'
+        }
+    else:
+        return {
+            'tool': 'DKIM Lookup',
+            'query': query,
+            'status': 'warning',
+            'selectors_checked': selectors_checked,
+            'records': [],
+            'count': 0,
+            'message': f'No DKIM records found. Checked {len(common_selectors)} common selectors. Try specifying selector:domain format.'
+        }
+
+
+def parse_dkim_record(dkim_txt):
+    """Parse DKIM record into components."""
+    parsed = {}
+    # DKIM records can have semicolon-separated fields
+    parts = dkim_txt.replace(' ', '').split(';')
+    for part in parts:
+        part = part.strip()
+        if '=' in part:
+            key, value = part.split('=', 1)
+            parsed[key.strip()] = value.strip()
+    return parsed
+
+
+def tool_dmarc_lookup(domain):
+    """Look up DMARC record for a domain."""
+    dmarc_domain = f'_dmarc.{domain}'
+    try:
+        answers = dns.resolver.resolve(dmarc_domain, 'TXT')
+        for rdata in answers:
+            txt_value = str(rdata).strip('"')
+            if txt_value.startswith('v=DMARC1'):
+                parsed = parse_dmarc_record(txt_value)
+                return {
+                    'tool': 'DMARC Lookup',
+                    'query': domain,
+                    'status': 'success',
+                    'records': [{'value': txt_value, 'ttl': answers.rrset.ttl, 'parsed': parsed}],
+                    'command': f'dig _dmarc.{domain} TXT +short'
+                }
+        return {'tool': 'DMARC Lookup', 'query': domain, 'status': 'warning', 'message': 'No DMARC record found'}
+    except dns.resolver.NXDOMAIN:
+        return {'tool': 'DMARC Lookup', 'query': domain, 'status': 'warning', 'message': 'No DMARC record found'}
+    except dns.resolver.NoAnswer:
+        return {'tool': 'DMARC Lookup', 'query': domain, 'status': 'warning', 'message': 'No DMARC record found'}
+    except Exception as e:
+        return {'tool': 'DMARC Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+
+
+def parse_dmarc_record(dmarc):
+    """Parse DMARC record into components."""
+    parsed = {}
+    parts = dmarc.split(';')
+    for part in parts:
+        part = part.strip()
+        if '=' in part:
+            key, value = part.split('=', 1)
+            parsed[key.strip()] = value.strip()
+    return parsed
+
+
+def tool_ptr_lookup(ip):
+    """Reverse DNS lookup for an IP address."""
+    try:
+        # Validate IP format
+        socket.inet_aton(ip)
+        hostname, _, _ = socket.gethostbyaddr(ip)
+        return {
+            'tool': 'Reverse DNS (PTR)',
+            'query': ip,
+            'status': 'success',
+            'records': [{'hostname': hostname}],
+            'command': f'dig -x {ip} +short'
+        }
+    except socket.herror:
+        return {'tool': 'Reverse DNS (PTR)', 'query': ip, 'status': 'warning', 'message': 'No PTR record found'}
+    except socket.gaierror:
+        return {'tool': 'Reverse DNS (PTR)', 'query': ip, 'status': 'error', 'message': 'Invalid IP address'}
+    except Exception as e:
+        return {'tool': 'Reverse DNS (PTR)', 'query': ip, 'status': 'error', 'message': str(e)}
+
+
+def tool_blacklist_check(ip):
+    """Check if an IP is on common blacklists."""
+    # Common DNS blacklists
+    blacklists = [
+        'zen.spamhaus.org',
+        'bl.spamcop.net',
+        'b.barracudacentral.org',
+        'dnsbl.sorbs.net',
+        'spam.dnsbl.sorbs.net',
+        'cbl.abuseat.org',
+        'dnsbl-1.uceprotect.net',
+        'psbl.surriel.com',
+    ]
+
+    try:
+        socket.inet_aton(ip)
+    except socket.error:
+        return {'tool': 'Blacklist Check', 'query': ip, 'status': 'error', 'message': 'Invalid IP address'}
+
+    # Reverse the IP for DNSBL lookup
+    reversed_ip = '.'.join(reversed(ip.split('.')))
+
+    results = []
+    listed_count = 0
+
+    for bl in blacklists:
+        lookup = f'{reversed_ip}.{bl}'
+        try:
+            dns.resolver.resolve(lookup, 'A')
+            results.append({'blacklist': bl, 'listed': True})
+            listed_count += 1
+        except dns.resolver.NXDOMAIN:
+            results.append({'blacklist': bl, 'listed': False})
+        except:
+            results.append({'blacklist': bl, 'listed': None, 'error': 'Lookup failed'})
+
+    status = 'error' if listed_count > 0 else 'success'
+    return {
+        'tool': 'Blacklist Check',
+        'query': ip,
+        'status': status,
+        'records': results,
+        'listed_count': listed_count,
+        'total_checked': len(blacklists),
+        'message': f'Listed on {listed_count} of {len(blacklists)} blacklists' if listed_count > 0 else 'Not listed on any checked blacklists'
+    }
+
+
+def tool_ns_lookup(domain):
+    """Look up NS records for a domain."""
+    try:
+        answers = dns.resolver.resolve(domain, 'NS')
+        records = [{'nameserver': str(rdata).rstrip('.'), 'ttl': answers.rrset.ttl} for rdata in answers]
+        return {
+            'tool': 'NS Lookup',
+            'query': domain,
+            'status': 'success',
+            'records': records,
+            'count': len(records),
+            'command': f'dig {domain} NS +short'
+        }
+    except dns.resolver.NXDOMAIN:
+        return {'tool': 'NS Lookup', 'query': domain, 'status': 'error', 'message': 'Domain not found'}
+    except dns.resolver.NoAnswer:
+        return {'tool': 'NS Lookup', 'query': domain, 'status': 'warning', 'message': 'No NS records found'}
+    except Exception as e:
+        return {'tool': 'NS Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+
+
+def tool_soa_lookup(domain):
+    """Look up SOA record for a domain."""
+    try:
+        answers = dns.resolver.resolve(domain, 'SOA')
+        for rdata in answers:
+            return {
+                'tool': 'SOA Lookup',
+                'query': domain,
+                'status': 'success',
+                'records': [{
+                    'mname': str(rdata.mname).rstrip('.'),
+                    'rname': str(rdata.rname).rstrip('.'),
+                    'serial': rdata.serial,
+                    'refresh': rdata.refresh,
+                    'retry': rdata.retry,
+                    'expire': rdata.expire,
+                    'minimum': rdata.minimum,
+                    'ttl': answers.rrset.ttl
+                }],
+                'command': f'dig {domain} SOA +short'
+            }
+    except dns.resolver.NXDOMAIN:
+        return {'tool': 'SOA Lookup', 'query': domain, 'status': 'error', 'message': 'Domain not found'}
+    except dns.resolver.NoAnswer:
+        return {'tool': 'SOA Lookup', 'query': domain, 'status': 'warning', 'message': 'No SOA record found'}
+    except Exception as e:
+        return {'tool': 'SOA Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+
+
+def tool_cname_lookup(domain):
+    """Look up CNAME record for a domain."""
+    try:
+        answers = dns.resolver.resolve(domain, 'CNAME')
+        records = [{'target': str(rdata.target).rstrip('.'), 'ttl': answers.rrset.ttl} for rdata in answers]
+        return {
+            'tool': 'CNAME Lookup',
+            'query': domain,
+            'status': 'success',
+            'records': records,
+            'count': len(records),
+            'command': f'dig {domain} CNAME +short'
+        }
+    except dns.resolver.NXDOMAIN:
+        return {'tool': 'CNAME Lookup', 'query': domain, 'status': 'error', 'message': 'Domain not found'}
+    except dns.resolver.NoAnswer:
+        return {'tool': 'CNAME Lookup', 'query': domain, 'status': 'warning', 'message': 'No CNAME record found (domain may have A record instead)'}
+    except Exception as e:
+        return {'tool': 'CNAME Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+
+
+def tool_aaaa_lookup(domain):
+    """Look up AAAA (IPv6) records for a domain."""
+    try:
+        answers = dns.resolver.resolve(domain, 'AAAA')
+        records = [{'ip': str(rdata), 'ttl': answers.rrset.ttl} for rdata in answers]
+        return {
+            'tool': 'AAAA (IPv6) Lookup',
+            'query': domain,
+            'status': 'success',
+            'records': records,
+            'count': len(records),
+            'command': f'dig {domain} AAAA +short'
+        }
+    except dns.resolver.NXDOMAIN:
+        return {'tool': 'AAAA (IPv6) Lookup', 'query': domain, 'status': 'error', 'message': 'Domain not found'}
+    except dns.resolver.NoAnswer:
+        return {'tool': 'AAAA (IPv6) Lookup', 'query': domain, 'status': 'warning', 'message': 'No AAAA records found'}
+    except Exception as e:
+        return {'tool': 'AAAA (IPv6) Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+
+
+def check_smtp_connectivity(host, port=25, timeout=10):
+    """Check SMTP connectivity with full connection transcript."""
+    result = {
+        'host': host,
+        'port': port,
+        'status': 'error',
+        'connection': False,
+        'helo_supported': False,
+        'ehlo_supported': False,
+        'starttls': False,
+        'banner': None,
+        'capabilities': [],
+        'transcript': [],
+        'message': ''
+    }
+
+    def log(direction, data):
+        """Add to transcript."""
+        result['transcript'].append({
+            'direction': direction,  # 'send' or 'recv'
+            'data': data.strip() if data else ''
+        })
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((host, port))
+        result['connection'] = True
+        log('info', f'Connected to {host}:{port}')
+
+        # Read banner
+        banner = sock.recv(1024).decode('utf-8', errors='replace').strip()
+        result['banner'] = banner
+        log('recv', banner)
+
+        if not banner.startswith('220'):
+            result['message'] = f'Invalid banner response'
+            log('info', 'ERROR: Invalid banner (expected 220)')
+            sock.close()
+            return result
+
+        # Test EHLO first
+        ehlo_cmd = 'EHLO mxlab.test\r\n'
+        log('send', ehlo_cmd.strip())
+        sock.send(ehlo_cmd.encode())
+        ehlo_response = sock.recv(4096).decode('utf-8', errors='replace').strip()
+        log('recv', ehlo_response)
+
+        if ehlo_response.startswith('250'):
+            result['ehlo_supported'] = True
+            # Parse capabilities from EHLO response
+            lines = ehlo_response.split('\n')
+            for line in lines[1:]:  # Skip first line (greeting)
+                line = line.strip()
+                if line.startswith('250-') or line.startswith('250 '):
+                    cap = line[4:].strip()
+                    if cap:
+                        result['capabilities'].append(cap)
+                        if cap.upper() == 'STARTTLS':
+                            result['starttls'] = True
+
+            result['status'] = 'success'
+            result['message'] = 'EHLO supported'
+        else:
+            log('info', 'EHLO not supported, trying HELO...')
+
+        # Also test HELO
+        helo_cmd = 'HELO mxlab.test\r\n'
+        log('send', helo_cmd.strip())
+        sock.send(helo_cmd.encode())
+        helo_response = sock.recv(1024).decode('utf-8', errors='replace').strip()
+        log('recv', helo_response)
+
+        if helo_response.startswith('250'):
+            result['helo_supported'] = True
+            if not result['ehlo_supported']:
+                result['status'] = 'warning'
+                result['message'] = 'Only HELO supported (EHLO failed)'
+        else:
+            if not result['ehlo_supported']:
+                result['message'] = 'Neither EHLO nor HELO supported'
+
+        # Send QUIT
+        quit_cmd = 'QUIT\r\n'
+        log('send', quit_cmd.strip())
+        sock.send(quit_cmd.encode())
+        try:
+            quit_response = sock.recv(1024).decode('utf-8', errors='replace').strip()
+            log('recv', quit_response)
+        except:
+            pass
+
+        sock.close()
+        log('info', 'Connection closed')
+
+    except socket.timeout:
+        result['message'] = f'Connection timeout'
+        log('info', f'ERROR: Connection timeout after {timeout}s')
+    except ConnectionRefusedError:
+        result['message'] = f'Connection refused'
+        log('info', 'ERROR: Connection refused')
+    except OSError as e:
+        result['message'] = f'Network error: {str(e)}'
+        log('info', f'ERROR: {str(e)}')
+    except Exception as e:
+        result['message'] = str(e)
+        log('info', f'ERROR: {str(e)}')
+
+    return result
+
+
+def tool_smtp_check(domain):
+    """Check SMTP connectivity for ALL of a domain's mail servers with full logs."""
+    # First get MX records
+    mx_result = tool_mx_lookup(domain)
+
+    if mx_result['status'] == 'error':
+        return {
+            'tool': 'SMTP Connectivity',
+            'query': domain,
+            'status': 'error',
+            'message': 'Could not resolve MX records',
+            'rfc': RFC_TIPS['smtp']
+        }
+
+    mx_records = mx_result.get('records', [])
+    if not mx_records:
+        # Fallback to domain A record
+        mx_records = [{'host': domain, 'priority': 0, 'ips': [], 'ipv6': []}]
+
+    results_by_mx = []
+    overall_status = 'error'
+
+    for mx in mx_records:
+        host = mx['host']
+        mx_result_entry = {
+            'host': host,
+            'priority': mx.get('priority', 0),
+            'ips': mx.get('ips', []),
+            'ipv6': mx.get('ipv6', []),
+            'ports': {}
+        }
+
+        # Check port 25 (SMTP)
+        smtp_25 = check_smtp_connectivity(host, 25)
+        smtp_25['port_name'] = 'SMTP (25)'
+        mx_result_entry['ports']['25'] = smtp_25
+
+        if smtp_25['status'] == 'success':
+            overall_status = 'success'
+        elif smtp_25['status'] == 'warning' and overall_status != 'success':
+            overall_status = 'warning'
+
+        # Check port 587 (Submission)
+        smtp_587 = check_smtp_connectivity(host, 587)
+        smtp_587['port_name'] = 'Submission (587)'
+        mx_result_entry['ports']['587'] = smtp_587
+
+        # Check port 465 (SMTPS)
+        smtp_465 = check_smtp_connectivity(host, 465)
+        smtp_465['port_name'] = 'SMTPS (465)'
+        mx_result_entry['ports']['465'] = smtp_465
+
+        results_by_mx.append(mx_result_entry)
+
+    # Count successes
+    successful_mx = sum(1 for mx in results_by_mx if mx['ports']['25'].get('status') == 'success')
+
+    return {
+        'tool': 'SMTP Connectivity',
+        'query': domain,
+        'status': overall_status,
+        'mx_count': len(results_by_mx),
+        'mx_successful': successful_mx,
+        'results': results_by_mx,
+        'rfc': RFC_TIPS['smtp'],
+        'message': f'{successful_mx} of {len(results_by_mx)} MX servers responding on port 25',
+        'command': f'telnet {results_by_mx[0]["host"] if results_by_mx else domain} 25'
+    }
+
+
+def check_ssl_certificate(host, port=443, timeout=5):
+    """Check SSL certificate for a host, allowing untrusted certs."""
+    cert_info = {
+        'host': host,
+        'port': port,
+        'status': 'error',
+        'valid': False,
+        'trusted': False,
+        'subject': None,
+        'issuer': None,
+        'not_before': None,
+        'not_after': None,
+        'expired': None,
+        'days_remaining': None,
+        'san': [],
+        'error': None
+    }
+
+    try:
+        # Create SSL context that doesn't verify (to get cert even if untrusted)
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            with context.wrap_socket(sock, server_hostname=host) as ssock:
+                cert = ssock.getpeercert(binary_form=True)
+
+                # Parse the certificate
+                import ssl as ssl_module
+                cert_dict = ssl_module._ssl._test_decode_cert(cert) if hasattr(ssl_module._ssl, '_test_decode_cert') else {}
+
+                # Get certificate details using openssl-like parsing
+                try:
+                    # Use cryptography library if available, otherwise basic info
+                    from datetime import datetime
+                    cert_pem = ssl.DER_cert_to_PEM_cert(cert)
+
+                    # Try to get basic info from peercert
+                    context_verify = ssl.create_default_context()
+                    try:
+                        with socket.create_connection((host, port), timeout=timeout) as sock2:
+                            with context_verify.wrap_socket(sock2, server_hostname=host) as ssock2:
+                                cert_verified = ssock2.getpeercert()
+                                cert_info['trusted'] = True
+                    except ssl.SSLCertVerificationError as e:
+                        cert_info['trusted'] = False
+                        cert_info['trust_error'] = str(e)
+                    except:
+                        cert_info['trusted'] = False
+
+                    # Get cert info by connecting again with no verify
+                    with socket.create_connection((host, port), timeout=timeout) as sock3:
+                        with context.wrap_socket(sock3, server_hostname=host) as ssock3:
+                            cert_dict = ssock3.getpeercert()
+                            if cert_dict:
+                                # Subject
+                                subject = dict(x[0] for x in cert_dict.get('subject', []))
+                                cert_info['subject'] = subject.get('commonName', '')
+
+                                # Issuer
+                                issuer = dict(x[0] for x in cert_dict.get('issuer', []))
+                                cert_info['issuer'] = issuer.get('commonName', issuer.get('organizationName', ''))
+
+                                # Validity dates
+                                not_before = cert_dict.get('notBefore', '')
+                                not_after = cert_dict.get('notAfter', '')
+                                cert_info['not_before'] = not_before
+                                cert_info['not_after'] = not_after
+
+                                # Parse dates and check expiry
+                                if not_after:
+                                    try:
+                                        # Format: 'Dec 31 23:59:59 2024 GMT'
+                                        expiry = datetime.strptime(not_after, '%b %d %H:%M:%S %Y %Z')
+                                        now = datetime.utcnow()
+                                        cert_info['expired'] = expiry < now
+                                        cert_info['days_remaining'] = (expiry - now).days
+                                    except:
+                                        pass
+
+                                # SANs
+                                san = cert_dict.get('subjectAltName', [])
+                                cert_info['san'] = [x[1] for x in san if x[0] == 'DNS']
+
+                                cert_info['valid'] = True
+                                cert_info['status'] = 'success' if cert_info['trusted'] else 'warning'
+                except Exception as e:
+                    cert_info['error'] = str(e)
+
+    except socket.timeout:
+        cert_info['error'] = 'Connection timeout'
+    except ConnectionRefusedError:
+        cert_info['error'] = 'Connection refused'
+    except Exception as e:
+        cert_info['error'] = str(e)
+
+    return cert_info
+
+
+def tool_autodiscover_check(domain):
+    """Check Outlook Autodiscover configuration with SSL certificate status."""
+    import urllib.request
+    import urllib.error
+
+    results = {
+        'tool': 'Autodiscover Check',
+        'query': domain,
+        'status': 'warning',
+        'checks': [],
+        'rfc': RFC_TIPS['autodiscover']
+    }
+
+    # 1. Check autodiscover.domain.com A record
+    autodiscover_domain = f'autodiscover.{domain}'
+    try:
+        answers = dns.resolver.resolve(autodiscover_domain, 'A')
+        ips = [str(r) for r in answers]
+        results['checks'].append({
+            'name': 'Autodiscover A Record',
+            'type': 'dns',
+            'target': autodiscover_domain,
+            'status': 'success',
+            'message': f'Resolves to {", ".join(ips)}',
+            'ips': ips
+        })
+    except:
+        results['checks'].append({
+            'name': 'Autodiscover A Record',
+            'type': 'dns',
+            'target': autodiscover_domain,
+            'status': 'warning',
+            'message': 'No A record found'
+        })
+
+    # 2. Check autodiscover.domain.com CNAME
+    try:
+        answers = dns.resolver.resolve(autodiscover_domain, 'CNAME')
+        cname = str(answers[0].target).rstrip('.')
+        results['checks'].append({
+            'name': 'Autodiscover CNAME',
+            'type': 'dns',
+            'target': autodiscover_domain,
+            'status': 'success',
+            'message': f'CNAME points to {cname}',
+            'cname': cname
+        })
+    except:
+        results['checks'].append({
+            'name': 'Autodiscover CNAME',
+            'type': 'dns',
+            'target': autodiscover_domain,
+            'status': 'info',
+            'message': 'No CNAME record (may use A record)'
+        })
+
+    # 3. Check SRV record _autodiscover._tcp.domain
+    srv_domain = f'_autodiscover._tcp.{domain}'
+    try:
+        answers = dns.resolver.resolve(srv_domain, 'SRV')
+        srv_records = []
+        for rdata in answers:
+            srv_records.append({
+                'priority': rdata.priority,
+                'weight': rdata.weight,
+                'port': rdata.port,
+                'target': str(rdata.target).rstrip('.')
+            })
+        results['checks'].append({
+            'name': 'Autodiscover SRV Record',
+            'type': 'dns',
+            'target': srv_domain,
+            'status': 'success',
+            'message': f'SRV record found',
+            'records': srv_records
+        })
+    except:
+        results['checks'].append({
+            'name': 'Autodiscover SRV Record',
+            'type': 'dns',
+            'target': srv_domain,
+            'status': 'warning',
+            'message': 'No SRV record found',
+            'command': f'dig {srv_domain} SRV +short'
+        })
+
+    # 4. Check SSL certificate for autodiscover endpoints
+    ssl_hosts = [
+        autodiscover_domain,
+        domain
+    ]
+
+    for ssl_host in ssl_hosts:
+        cert_result = check_ssl_certificate(ssl_host, 443)
+        cert_status = 'success' if cert_result['trusted'] else ('warning' if cert_result['valid'] else 'error')
+
+        cert_message = ''
+        if cert_result['valid']:
+            if cert_result['trusted']:
+                cert_message = f"Valid & trusted - {cert_result['subject']}"
+            else:
+                cert_message = f"Valid but UNTRUSTED - {cert_result.get('trust_error', 'Certificate not trusted')}"
+            if cert_result['expired']:
+                cert_message = f"EXPIRED - {cert_result['subject']}"
+                cert_status = 'error'
+            elif cert_result['days_remaining'] is not None and cert_result['days_remaining'] < 30:
+                cert_message += f" (expires in {cert_result['days_remaining']} days)"
+                cert_status = 'warning'
+        else:
+            cert_message = cert_result.get('error', 'Could not retrieve certificate')
+
+        results['checks'].append({
+            'name': f'SSL Certificate ({ssl_host})',
+            'type': 'ssl',
+            'target': ssl_host,
+            'status': cert_status,
+            'message': cert_message,
+            'certificate': {
+                'subject': cert_result.get('subject'),
+                'issuer': cert_result.get('issuer'),
+                'valid_from': cert_result.get('not_before'),
+                'valid_until': cert_result.get('not_after'),
+                'trusted': cert_result.get('trusted'),
+                'expired': cert_result.get('expired'),
+                'days_remaining': cert_result.get('days_remaining'),
+                'san': cert_result.get('san', [])
+            }
+        })
+
+    # 5. Check HTTP endpoints (all of them, with results for each)
+    autodiscover_urls = [
+        f'https://autodiscover.{domain}/autodiscover/autodiscover.xml',
+        f'https://{domain}/autodiscover/autodiscover.xml',
+        f'http://autodiscover.{domain}/autodiscover/autodiscover.xml',
+        f'http://{domain}/autodiscover/autodiscover.xml'
+    ]
+
+    # Create SSL context that ignores certificate errors
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+
+    for url in autodiscover_urls:
+        check_result = {
+            'name': 'HTTP Endpoint',
+            'type': 'http',
+            'target': url,
+            'status': 'error',
+            'message': ''
+        }
+
+        try:
+            req = urllib.request.Request(url, method='GET')
+            req.add_header('User-Agent', 'MXLab/1.0 Autodiscover')
+
+            # Use SSL context for HTTPS URLs
+            if url.startswith('https://'):
+                with urllib.request.urlopen(req, timeout=5, context=ssl_context) as response:
+                    status_code = response.getcode()
+                    check_result['http_code'] = status_code
+                    check_result['status'] = 'success'
+                    check_result['message'] = f'Accessible (HTTP {status_code})'
+            else:
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    status_code = response.getcode()
+                    check_result['http_code'] = status_code
+                    check_result['status'] = 'success'
+                    check_result['message'] = f'Accessible (HTTP {status_code})'
+
+        except urllib.error.HTTPError as e:
+            check_result['http_code'] = e.code
+            if e.code in [401, 403]:
+                check_result['status'] = 'success'
+                check_result['message'] = f'Exists - requires auth (HTTP {e.code})'
+            elif e.code == 404:
+                check_result['status'] = 'warning'
+                check_result['message'] = 'Not found (HTTP 404)'
+            else:
+                check_result['status'] = 'warning'
+                check_result['message'] = f'HTTP error {e.code}'
+        except urllib.error.URLError as e:
+            check_result['message'] = f'Connection failed: {str(e.reason)[:50]}'
+        except socket.timeout:
+            check_result['message'] = 'Connection timeout'
+        except Exception as e:
+            check_result['message'] = str(e)[:50]
+
+        results['checks'].append(check_result)
+
+    # Determine overall status
+    success_count = sum(1 for c in results['checks'] if c['status'] == 'success')
+    if success_count >= 2:
+        results['status'] = 'success'
+        results['message'] = 'Autodiscover is properly configured'
+    elif success_count >= 1:
+        results['status'] = 'warning'
+        results['message'] = 'Partial Autodiscover configuration'
+    else:
+        results['status'] = 'error'
+        results['message'] = 'Autodiscover not configured'
+
+    return results
+
+
+@app.route('/api/tools/report/stream')
+def stream_domain_report():
+    """Stream domain report results progressively using Server-Sent Events."""
+    from flask import Response
+
+    domain = request.args.get('query', '').strip()
+
+    if not domain:
+        return jsonify({'error': 'Domain parameter is required'}), 400
+
+    if not DNS_AVAILABLE:
+        return jsonify({'error': 'DNS library not available'}), 500
+
+    def generate():
+        """Generator function for SSE stream."""
+        checks_completed = 0
+        total_checks = 11  # Total number of checks
+
+        # Helper to send SSE event
+        def send_event(event_type, data):
+            return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+        # Send start event
+        yield send_event('start', {'domain': domain, 'total_checks': total_checks})
+
+        # 1. MX Lookup
+        result = tool_mx_lookup(domain)
+        result['rfc'] = RFC_TIPS['mx']
+        checks_completed += 1
+        yield send_event('check', {'name': 'mx', 'result': result, 'progress': checks_completed})
+
+        # 2. A Record
+        result = tool_a_lookup(domain)
+        result['rfc'] = RFC_TIPS['a']
+        checks_completed += 1
+        yield send_event('check', {'name': 'a', 'result': result, 'progress': checks_completed})
+
+        # 3. AAAA Record
+        result = tool_aaaa_lookup(domain)
+        result['rfc'] = RFC_TIPS['aaaa']
+        checks_completed += 1
+        yield send_event('check', {'name': 'aaaa', 'result': result, 'progress': checks_completed})
+
+        # 4. NS Record
+        result = tool_ns_lookup(domain)
+        result['rfc'] = RFC_TIPS['ns']
+        checks_completed += 1
+        yield send_event('check', {'name': 'ns', 'result': result, 'progress': checks_completed})
+
+        # 5. TXT Record
+        result = tool_txt_lookup(domain)
+        checks_completed += 1
+        yield send_event('check', {'name': 'txt', 'result': result, 'progress': checks_completed})
+
+        # 6. SPF
+        result = tool_spf_lookup(domain)
+        if result:
+            result['rfc'] = RFC_TIPS['spf']
+        else:
+            result = {'tool': 'SPF Lookup', 'status': 'warning', 'message': 'No SPF record found', 'rfc': RFC_TIPS['spf']}
+        checks_completed += 1
+        yield send_event('check', {'name': 'spf', 'result': result, 'progress': checks_completed})
+
+        # 7. DKIM
+        result = tool_dkim_lookup(domain)
+        result['rfc'] = RFC_TIPS['dkim']
+        checks_completed += 1
+        yield send_event('check', {'name': 'dkim', 'result': result, 'progress': checks_completed})
+
+        # 8. DMARC
+        result = tool_dmarc_lookup(domain)
+        result['rfc'] = RFC_TIPS['dmarc']
+        checks_completed += 1
+        yield send_event('check', {'name': 'dmarc', 'result': result, 'progress': checks_completed})
+
+        # 9. SMTP (slower)
+        result = tool_smtp_check(domain)
+        checks_completed += 1
+        yield send_event('check', {'name': 'smtp', 'result': result, 'progress': checks_completed})
+
+        # 10. Autodiscover (slower)
+        result = tool_autodiscover_check(domain)
+        checks_completed += 1
+        yield send_event('check', {'name': 'autodiscover', 'result': result, 'progress': checks_completed})
+
+        # 11. Blacklist (need MX IP first)
+        mx_result = tool_mx_lookup(domain)
+        if mx_result.get('records'):
+            mx_host = mx_result['records'][0]['host']
+            try:
+                mx_ips = dns.resolver.resolve(mx_host, 'A')
+                mx_ip = str(mx_ips[0])
+                result = tool_blacklist_check(mx_ip)
+                result['rfc'] = RFC_TIPS['blacklist']
+                result['checked_ip'] = mx_ip
+                result['checked_host'] = mx_host
+            except:
+                result = {
+                    'tool': 'Blacklist Check',
+                    'status': 'warning',
+                    'message': 'Could not resolve MX server IP'
+                }
+        else:
+            result = {
+                'tool': 'Blacklist Check',
+                'status': 'warning',
+                'message': 'No MX records to check'
+            }
+        checks_completed += 1
+        yield send_event('check', {'name': 'blacklist', 'result': result, 'progress': checks_completed})
+
+        # Send completion event
+        yield send_event('complete', {'domain': domain, 'total_checks': total_checks})
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        }
+    )
+
+
+@app.route('/api/tools/report')
+def full_domain_report():
+    """Generate a comprehensive domain report with all checks."""
+    domain = request.args.get('query', '').strip()
+
+    if not domain:
+        return jsonify({'error': 'Domain parameter is required'}), 400
+
+    if not DNS_AVAILABLE:
+        return jsonify({'error': 'DNS library not available'}), 500
+
+    # Run all checks
+    report = {
+        'domain': domain,
+        'timestamp': datetime.now().isoformat(),
+        'checks': {},
+        'summary': {
+            'total': 0,
+            'passed': 0,
+            'warnings': 0,
+            'errors': 0,
+            'score': 0
+        }
+    }
+
+    # DNS Checks
+    report['checks']['mx'] = tool_mx_lookup(domain)
+    report['checks']['mx']['rfc'] = RFC_TIPS['mx']
+
+    report['checks']['a'] = tool_a_lookup(domain)
+    report['checks']['a']['rfc'] = RFC_TIPS['a']
+
+    report['checks']['aaaa'] = tool_aaaa_lookup(domain)
+    report['checks']['aaaa']['rfc'] = RFC_TIPS['aaaa']
+
+    report['checks']['ns'] = tool_ns_lookup(domain)
+    report['checks']['ns']['rfc'] = RFC_TIPS['ns']
+
+    report['checks']['txt'] = tool_txt_lookup(domain)
+
+    # Email Authentication
+    report['checks']['spf'] = tool_spf_lookup(domain)
+    report['checks']['spf']['rfc'] = RFC_TIPS['spf']
+
+    report['checks']['dkim'] = tool_dkim_lookup(domain)
+    report['checks']['dkim']['rfc'] = RFC_TIPS['dkim']
+
+    report['checks']['dmarc'] = tool_dmarc_lookup(domain)
+    report['checks']['dmarc']['rfc'] = RFC_TIPS['dmarc']
+
+    # SMTP Connectivity
+    report['checks']['smtp'] = tool_smtp_check(domain)
+
+    # Autodiscover
+    report['checks']['autodiscover'] = tool_autodiscover_check(domain)
+
+    # Blacklist check (if we have MX IPs)
+    if report['checks']['mx'].get('records'):
+        mx_host = report['checks']['mx']['records'][0]['host']
+        try:
+            mx_ips = dns.resolver.resolve(mx_host, 'A')
+            mx_ip = str(mx_ips[0])
+            report['checks']['blacklist'] = tool_blacklist_check(mx_ip)
+            report['checks']['blacklist']['rfc'] = RFC_TIPS['blacklist']
+            report['checks']['blacklist']['checked_ip'] = mx_ip
+            report['checks']['blacklist']['checked_host'] = mx_host
+        except:
+            report['checks']['blacklist'] = {
+                'tool': 'Blacklist Check',
+                'status': 'warning',
+                'message': 'Could not resolve MX server IP for blacklist check'
+            }
+
+    # Calculate summary
+    for check_name, check_data in report['checks'].items():
+        report['summary']['total'] += 1
+        status = check_data.get('status', 'error')
+        if status == 'success':
+            report['summary']['passed'] += 1
+        elif status == 'warning':
+            report['summary']['warnings'] += 1
+        else:
+            report['summary']['errors'] += 1
+
+    # Calculate score (0-100)
+    if report['summary']['total'] > 0:
+        base_score = (report['summary']['passed'] / report['summary']['total']) * 100
+        warning_penalty = report['summary']['warnings'] * 5
+        report['summary']['score'] = max(0, round(base_score - warning_penalty))
+
+    # Send Telegram notification (async, non-blocking)
+    client_ip = request.headers.get('X-Forwarded-For', request.headers.get('X-Real-IP', request.remote_addr))
+    if client_ip and ',' in client_ip:
+        client_ip = client_ip.split(',')[0].strip()
+
+    import threading
+    def send_notification():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(send_telegram_report_notification(domain, report['summary'], client_ip))
+        loop.close()
+
+    threading.Thread(target=send_notification, daemon=True).start()
+
+    return jsonify(report)
+
+
+def run_smtp_server():
+    """Run the SMTP server in a separate thread."""
+    handler = MailHandler()
+    controller = Controller(handler, hostname='0.0.0.0', port=SMTP_PORT)
+    controller.start()
+    print(f"[SMTP] Server running on port {SMTP_PORT}")
+    return controller
+
+
+if __name__ == '__main__':
+    print("=" * 50)
+    print("  Mail Tester - Email Deliverability Analyzer")
+    print("=" * 50)
+
+    # Start SMTP server
+    smtp_controller = run_smtp_server()
+
+    # Start Flask web server
+    print(f"[WEB] Server running on http://localhost:{WEB_PORT}")
+    print(f"\nUsage:")
+    print(f"  1. Open http://localhost:{WEB_PORT} in your browser")
+    print(f"  2. Generate a test email address")
+    print(f"  3. Send an email to the generated address via SMTP port {SMTP_PORT}")
+    print(f"  4. View the analysis results")
+    print("=" * 50)
+
+    try:
+        app.run(host='0.0.0.0', port=WEB_PORT, debug=False)
+    finally:
+        smtp_controller.stop()

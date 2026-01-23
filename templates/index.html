@@ -1,0 +1,2203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXLab - Email Deliverability & DNS Tools</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            min-height: 100vh;
+            color: #e2e8f0;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .logo-container {
+            margin-bottom: 16px;
+        }
+
+        .logo {
+            width: 70px;
+            height: 70px;
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 700;
+            color: #f8fafc;
+            margin-bottom: 6px;
+        }
+
+        .subtitle {
+            color: #94a3b8;
+            font-size: 1rem;
+            font-weight: 400;
+        }
+
+        /* Main Tabs */
+        .main-tabs {
+            display: flex;
+            justify-content: center;
+            gap: 4px;
+            margin-bottom: 30px;
+            background: #1e293b;
+            padding: 6px;
+            border-radius: 12px;
+            max-width: 400px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .main-tab {
+            flex: 1;
+            padding: 12px 24px;
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+
+        .main-tab:hover {
+            color: #e2e8f0;
+        }
+
+        .main-tab.active {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .main-content {
+            display: none;
+        }
+
+        .main-content.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 32px;
+            margin-bottom: 20px;
+            border: 1px solid #334155;
+        }
+
+        /* MXtest Styles */
+        .generate-section {
+            text-align: center;
+        }
+
+        .btn {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 14px 32px;
+            font-size: 1rem;
+            font-weight: 500;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .email-display {
+            display: none;
+            margin-top: 32px;
+            text-align: center;
+        }
+
+        .email-display.active {
+            display: block;
+        }
+
+        .email-address {
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #3b82f6;
+            font-family: 'SF Mono', Monaco, monospace;
+            background: #0f172a;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            word-break: break-all;
+            border: 1px solid #334155;
+        }
+
+        .instructions {
+            color: #94a3b8;
+            margin: 16px 0;
+            font-size: 0.95rem;
+        }
+
+        .waiting {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 24px;
+            color: #94a3b8;
+        }
+
+        .waiting.active {
+            display: flex;
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #334155;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* MXlab Lookup Styles */
+        .tools-section {
+            text-align: center;
+        }
+
+        .tools-input-container {
+            max-width: 600px;
+            margin: 0 auto 30px;
+        }
+
+        .tools-input-wrapper {
+            display: flex;
+            gap: 10px;
+        }
+
+        .tools-input {
+            flex: 1;
+            padding: 14px 20px;
+            font-size: 1rem;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #e2e8f0;
+            font-family: 'SF Mono', Monaco, monospace;
+        }
+
+        .tools-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .tools-input::placeholder {
+            color: #64748b;
+        }
+
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .tool-btn {
+            padding: 14px 16px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #94a3b8;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .tool-btn:hover {
+            border-color: #3b82f6;
+            color: #e2e8f0;
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .tool-btn.active {
+            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.15);
+            color: #3b82f6;
+        }
+
+        .tool-btn svg {
+            width: 24px;
+            height: 24px;
+        }
+
+        .tool-categories {
+            margin-bottom: 30px;
+        }
+
+        .tool-category-title {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+            text-align: left;
+        }
+
+        .tools-results {
+            display: none;
+            margin-top: 30px;
+            text-align: left;
+        }
+
+        .tools-results.active {
+            display: block;
+        }
+
+        .tools-results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .tools-results-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #f8fafc;
+        }
+
+        .tools-results-domain {
+            font-family: 'SF Mono', Monaco, monospace;
+            color: #3b82f6;
+            font-size: 0.9rem;
+        }
+
+        .tools-results-content {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid #334155;
+        }
+
+        .result-row {
+            display: flex;
+            padding: 12px 0;
+            border-bottom: 1px solid #1e293b;
+        }
+
+        .result-row:last-child {
+            border-bottom: none;
+        }
+
+        .result-label {
+            width: 140px;
+            flex-shrink: 0;
+            color: #64748b;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .result-value {
+            flex: 1;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.9rem;
+            color: #e2e8f0;
+            word-break: break-all;
+        }
+
+        .result-value.pass {
+            color: #22c55e;
+        }
+
+        .result-value.fail {
+            color: #ef4444;
+        }
+
+        .result-value.warning {
+            color: #f59e0b;
+        }
+
+        .result-records {
+            margin-top: 16px;
+        }
+
+        .result-record {
+            background: #1e293b;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.85rem;
+            color: #cbd5e1;
+        }
+
+        .result-record-priority {
+            color: #3b82f6;
+            font-weight: 600;
+            margin-right: 10px;
+        }
+
+        .loading-tools {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 40px;
+            color: #94a3b8;
+        }
+
+        .loading-tools.active {
+            display: flex;
+        }
+
+        /* Results section (shared) */
+        .results {
+            display: none;
+        }
+
+        .results.active {
+            display: block;
+            animation: fadeIn 0.5s ease;
+        }
+
+        .score-card {
+            text-align: center;
+            padding: 40px;
+        }
+
+        .status-character {
+            margin-bottom: 24px;
+        }
+
+        .character-svg {
+            width: 160px;
+            height: 160px;
+        }
+
+        .status-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #f8fafc;
+            margin-top: 12px;
+        }
+
+        .status-subtitle {
+            color: #94a3b8;
+            margin-top: 4px;
+            font-size: 0.95rem;
+        }
+
+        .score {
+            font-size: 4.5rem;
+            font-weight: 700;
+            color: #3b82f6;
+        }
+
+        .score-label {
+            font-size: 1rem;
+            color: #94a3b8;
+            margin-top: 8px;
+        }
+
+        .score.good { color: #22c55e; }
+        .score.medium { color: #f59e0b; }
+        .score.bad { color: #ef4444; }
+
+        .checks-list {
+            margin-top: 20px;
+        }
+
+        .check-item {
+            background: #0f172a;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            border-left: 3px solid #334155;
+            overflow: hidden;
+            transition: all 0.2s;
+        }
+
+        .check-item:hover {
+            border-left-color: #3b82f6;
+        }
+
+        .check-item.pass { border-left-color: #22c55e; }
+        .check-item.pass:hover { border-left-color: #16a34a; }
+        .check-item.warning { border-left-color: #f59e0b; }
+        .check-item.warning:hover { border-left-color: #d97706; }
+        .check-item.fail { border-left-color: #ef4444; }
+        .check-item.fail:hover { border-left-color: #dc2626; }
+
+        .check-header {
+            display: flex;
+            align-items: center;
+            padding: 16px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .check-header:hover {
+            background: rgba(255,255,255,0.02);
+        }
+
+        .check-icon {
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 16px;
+            flex-shrink: 0;
+        }
+
+        .check-icon svg {
+            width: 24px;
+            height: 24px;
+        }
+
+        .check-details {
+            flex: 1;
+        }
+
+        .check-name {
+            font-weight: 500;
+            color: #f8fafc;
+            font-size: 0.95rem;
+        }
+
+        .check-message {
+            font-size: 0.9rem;
+            color: #94a3b8;
+            margin-top: 4px;
+        }
+
+        .check-expand {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #64748b;
+            transition: transform 0.2s;
+            flex-shrink: 0;
+        }
+
+        .check-item.expanded .check-expand {
+            transform: rotate(180deg);
+        }
+
+        .check-body {
+            display: none;
+            padding: 0 16px 16px 68px;
+            border-top: 1px solid #1e293b;
+        }
+
+        .check-item.expanded .check-body {
+            display: block;
+        }
+
+        .check-description {
+            color: #94a3b8;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            margin-bottom: 16px;
+        }
+
+        .check-technical {
+            background: #1e293b;
+            border-radius: 6px;
+            padding: 16px;
+            margin-top: 12px;
+        }
+
+        .check-technical-title {
+            font-size: 0.8rem;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        .check-code {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.85rem;
+            color: #e2e8f0;
+            background: #0f172a;
+            padding: 12px;
+            border-radius: 4px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .check-command {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .check-command code {
+            flex: 1;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.8rem;
+            color: #94a3b8;
+            background: #0f172a;
+            padding: 8px 12px;
+            border-radius: 4px;
+        }
+
+        .check-command .copy-cmd {
+            background: #334155;
+            border: none;
+            color: #94a3b8;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            transition: all 0.2s;
+        }
+
+        .check-command .copy-cmd:hover {
+            background: #475569;
+            color: #e2e8f0;
+        }
+
+        .check-info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .check-info-item {
+            background: #0f172a;
+            padding: 12px;
+            border-radius: 6px;
+        }
+
+        .check-info-label {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+
+        .check-info-value {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.85rem;
+            color: #e2e8f0;
+            word-break: break-all;
+        }
+
+        /* Tab content styles */
+        .tab-container {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            background: transparent;
+            border: 1px solid #334155;
+            color: #94a3b8;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .tab:hover {
+            border-color: #3b82f6;
+            color: #e2e8f0;
+        }
+
+        .tab.active {
+            background: #3b82f6;
+            border-color: #3b82f6;
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .email-details {
+            margin-top: 20px;
+        }
+
+        .detail-group {
+            margin-bottom: 20px;
+        }
+
+        .detail-label {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+        }
+
+        .detail-value {
+            font-family: 'SF Mono', Monaco, monospace;
+            background: #0f172a;
+            padding: 12px;
+            border-radius: 6px;
+            word-break: break-all;
+            color: #cbd5e1;
+            font-size: 0.9rem;
+            border: 1px solid #334155;
+        }
+
+        .headers-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        .headers-table th,
+        .headers-table td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #334155;
+        }
+
+        .headers-table th {
+            color: #64748b;
+            font-weight: 500;
+            width: 180px;
+            font-size: 0.85rem;
+        }
+
+        .headers-table td {
+            font-family: 'SF Mono', Monaco, monospace;
+            word-break: break-all;
+            color: #94a3b8;
+        }
+
+        .raw-email {
+            background: #0f172a;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.85rem;
+            white-space: pre-wrap;
+            overflow-x: auto;
+            max-height: 400px;
+            overflow-y: auto;
+            color: #94a3b8;
+            border: 1px solid #334155;
+        }
+
+        .copy-btn {
+            background: #334155;
+            border: none;
+            color: #94a3b8;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            margin-left: 12px;
+            transition: all 0.2s;
+        }
+
+        .copy-btn:hover {
+            background: #475569;
+            color: #e2e8f0;
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 40px;
+            padding: 24px;
+            border-top: 1px solid #334155;
+            color: #64748b;
+            font-size: 0.9rem;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+
+        /* Blacklist specific styles */
+        .blacklist-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 8px;
+            margin-top: 16px;
+        }
+
+        .blacklist-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            background: #1e293b;
+            border-radius: 6px;
+            font-size: 0.85rem;
+        }
+
+        .blacklist-item.listed {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .blacklist-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+        }
+
+        .blacklist-item.listed .blacklist-status {
+            background: #ef4444;
+        }
+
+        .blacklist-name {
+            color: #94a3b8;
+        }
+
+        /* Report Summary Styles */
+        .report-summary {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 30px;
+            flex-wrap: wrap;
+            border: 1px solid #334155;
+        }
+
+        .summary-score {
+            text-align: center;
+            min-width: 120px;
+        }
+
+        .summary-score-value {
+            font-size: 3.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #22c55e, #3b82f6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .summary-score-value.warning {
+            background: linear-gradient(135deg, #f59e0b, #ef4444);
+            -webkit-background-clip: text;
+            background-clip: text;
+        }
+
+        .summary-score-value.error {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            -webkit-background-clip: text;
+            background-clip: text;
+        }
+
+        .summary-score-label {
+            color: #64748b;
+            font-size: 0.85rem;
+            margin-top: 4px;
+        }
+
+        .summary-stats {
+            display: flex;
+            gap: 20px;
+            flex: 1;
+            justify-content: center;
+        }
+
+        .summary-stat {
+            text-align: center;
+            padding: 12px 20px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 8px;
+        }
+
+        .summary-stat span {
+            display: block;
+            font-size: 1.8rem;
+            font-weight: 600;
+        }
+
+        .summary-stat.passed span { color: #22c55e; }
+        .summary-stat.warnings span { color: #f59e0b; }
+        .summary-stat.errors span { color: #ef4444; }
+
+        .summary-domain {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 1.1rem;
+            color: #3b82f6;
+            padding: 8px 16px;
+            background: rgba(59, 130, 246, 0.1);
+            border-radius: 6px;
+        }
+
+        /* Report Check Items */
+        .report-checks {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .report-check {
+            background: #1e293b;
+            border-radius: 10px;
+            border: 1px solid #334155;
+            overflow: hidden;
+        }
+
+        .report-check-header {
+            display: flex;
+            align-items: center;
+            padding: 16px 20px;
+            cursor: pointer;
+            gap: 16px;
+        }
+
+        .report-check-header:hover {
+            background: rgba(255,255,255,0.02);
+        }
+
+        .report-check-status {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .report-check-status.success { background: rgba(34, 197, 94, 0.15); }
+        .report-check-status.warning { background: rgba(245, 158, 11, 0.15); }
+        .report-check-status.error { background: rgba(239, 68, 68, 0.15); }
+
+        .report-check-status svg {
+            width: 20px;
+            height: 20px;
+        }
+
+        .report-check-info {
+            flex: 1;
+        }
+
+        .report-check-title {
+            font-weight: 600;
+            color: #f8fafc;
+            font-size: 1rem;
+        }
+
+        .report-check-message {
+            color: #94a3b8;
+            font-size: 0.9rem;
+            margin-top: 2px;
+        }
+
+        .report-check-expand {
+            color: #64748b;
+            transition: transform 0.2s;
+        }
+
+        .report-check.expanded .report-check-expand {
+            transform: rotate(180deg);
+        }
+
+        .report-check-body {
+            display: none;
+            padding: 0 20px 20px;
+            border-top: 1px solid #334155;
+        }
+
+        .report-check.expanded .report-check-body {
+            display: block;
+        }
+
+        /* RFC Tip Box */
+        .rfc-tip {
+            background: rgba(59, 130, 246, 0.08);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 16px;
+        }
+
+        .rfc-tip-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .rfc-tip-badge {
+            background: #3b82f6;
+            color: white;
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+
+        .rfc-tip-title {
+            color: #94a3b8;
+            font-size: 0.85rem;
+        }
+
+        .rfc-tip-content {
+            color: #cbd5e1;
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        .rfc-tip-fix {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(59, 130, 246, 0.2);
+        }
+
+        .rfc-tip-fix-label {
+            color: #22c55e;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        /* Check Data Display */
+        .check-data {
+            margin-top: 16px;
+        }
+
+        .check-data-section {
+            margin-bottom: 16px;
+        }
+
+        .check-data-title {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .check-data-records {
+            background: #0f172a;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .check-data-record {
+            padding: 10px 14px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.85rem;
+            color: #e2e8f0;
+            border-bottom: 1px solid #1e293b;
+        }
+
+        .check-data-record:last-child {
+            border-bottom: none;
+        }
+
+        .check-data-record .priority {
+            color: #3b82f6;
+            font-weight: 600;
+            margin-right: 10px;
+        }
+
+        .check-data-record .ttl {
+            color: #64748b;
+            font-size: 0.8rem;
+            margin-left: 10px;
+        }
+
+        .smtp-results {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        .smtp-result {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 14px;
+        }
+
+        .smtp-result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .smtp-result-host {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.85rem;
+            color: #e2e8f0;
+        }
+
+        .smtp-result-port {
+            font-size: 0.75rem;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: #334155;
+            color: #94a3b8;
+        }
+
+        .smtp-result-status {
+            font-size: 0.85rem;
+        }
+
+        .smtp-result-status.success { color: #22c55e; }
+        .smtp-result-status.error { color: #ef4444; }
+
+        .autodiscover-checks {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .autodiscover-check {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 14px;
+            background: #0f172a;
+            border-radius: 6px;
+        }
+
+        .autodiscover-check-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .autodiscover-check-status.success { background: #22c55e; }
+        .autodiscover-check-status.warning { background: #f59e0b; }
+        .autodiscover-check-status.error { background: #ef4444; }
+
+        .autodiscover-check-name {
+            flex: 1;
+            color: #e2e8f0;
+            font-size: 0.9rem;
+        }
+
+        .autodiscover-check-target {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.8rem;
+            color: #64748b;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo-container">
+                <svg class="logo" viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#3b82f6"/>
+                            <stop offset="100%" style="stop-color:#1d4ed8"/>
+                        </linearGradient>
+                    </defs>
+                    <rect x="8" y="18" width="64" height="44" rx="4" fill="url(#logoGrad)"/>
+                    <path d="M8 22 L40 45 L72 22" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M8 58 L28 40" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/>
+                    <path d="M72 58 L52 40" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/>
+                </svg>
+            </div>
+            <h1>MXLab</h1>
+            <p class="subtitle">Email Deliverability & DNS Tools</p>
+        </header>
+
+        <!-- Main Tab Navigation -->
+        <div class="main-tabs">
+            <button class="main-tab active" onclick="showMainTab('mxtest')">MXtest</button>
+            <button class="main-tab" onclick="showMainTab('tools')">MXlab Lookup</button>
+        </div>
+
+        <!-- MXtest Content -->
+        <div class="main-content active" id="mxtestContent">
+            <div class="card generate-section">
+                <button class="btn" id="generateBtn" onclick="generateEmail()">
+                    Generate Test Email Address
+                </button>
+
+                <div class="email-display" id="emailDisplay">
+                    <p class="instructions">Send your test email to:</p>
+                    <div class="email-address" id="emailAddress">
+                        <span id="generatedEmail"></span>
+                        <button class="copy-btn" onclick="copyEmail()">Copy</button>
+                    </div>
+                </div>
+
+                <div class="waiting" id="waiting">
+                    <div class="spinner"></div>
+                    <span>Waiting for email...</span>
+                </div>
+            </div>
+
+            <div class="results" id="results">
+                <div class="card score-card">
+                    <div class="status-character" id="statusCharacter"></div>
+                    <div class="score" id="score">10/10</div>
+                    <div class="score-label">Deliverability Score</div>
+                </div>
+
+                <div class="card">
+                    <div class="tab-container">
+                        <button class="tab active" onclick="showTab('checks')">Analysis</button>
+                        <button class="tab" onclick="showTab('details')">Email Details</button>
+                        <button class="tab" onclick="showTab('headers')">Headers</button>
+                        <button class="tab" onclick="showTab('raw')">Raw Message</button>
+                    </div>
+
+                    <div class="tab-content active" id="checksTab">
+                        <div class="checks-list" id="checksList"></div>
+                    </div>
+
+                    <div class="tab-content" id="detailsTab">
+                        <div class="email-details" id="emailDetails"></div>
+                    </div>
+
+                    <div class="tab-content" id="headersTab">
+                        <table class="headers-table" id="headersTable">
+                            <tbody></tbody>
+                        </table>
+                    </div>
+
+                    <div class="tab-content" id="rawTab">
+                        <pre class="raw-email" id="rawEmail"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- MXlab Lookup Content -->
+        <div class="main-content" id="toolsContent">
+            <div class="card tools-section">
+                <div class="tools-input-container">
+                    <div class="tools-input-wrapper">
+                        <input type="text" class="tools-input" id="toolsInput" placeholder="Enter domain (e.g., google.com)" onkeypress="if(event.key==='Enter') runFullReport()">
+                        <button class="btn" onclick="runFullReport()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;margin-right:8px;vertical-align:middle;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                            Full Domain Report
+                        </button>
+                    </div>
+                    <p style="color:#64748b;font-size:0.85rem;margin-top:12px;text-align:center;">Checks: MX, A, AAAA, NS, SPF, DKIM, DMARC, SMTP Connectivity, Autodiscover, Blacklists</p>
+                </div>
+
+                <div class="loading-tools" id="loadingTools">
+                    <div class="spinner"></div>
+                    <span id="loadingText">Running comprehensive domain analysis...</span>
+                </div>
+
+                <div class="tools-results" id="toolsResults">
+                    <!-- Summary Card -->
+                    <div class="report-summary" id="reportSummary">
+                        <div class="summary-score">
+                            <div class="summary-score-value" id="summaryScore">0</div>
+                            <div class="summary-score-label">Health Score</div>
+                        </div>
+                        <div class="summary-stats">
+                            <div class="summary-stat passed"><span id="statPassed">0</span> Passed</div>
+                            <div class="summary-stat warnings"><span id="statWarnings">0</span> Warnings</div>
+                            <div class="summary-stat errors"><span id="statErrors">0</span> Errors</div>
+                        </div>
+                        <div class="summary-domain" id="summaryDomain">example.com</div>
+                    </div>
+
+                    <!-- Report Checks -->
+                    <div class="report-checks" id="reportChecks">
+                        <!-- Checks will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>MXLab - Email Deliverability & DNS Tools</p>
+        </footer>
+    </div>
+
+    <script>
+        // Selected tool
+        let selectedTool = 'mx';
+
+        // Icons
+        const icons = {
+            pass: `<svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17L4 12" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+            warning: `<svg viewBox="0 0 24 24" fill="none"><path d="M12 9V13M12 17H12.01M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/></svg>`,
+            fail: `<svg viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6L18 18" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+            chevron: `<svg viewBox="0 0 24 24" fill="none"><path d="M6 9L12 15L18 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+        };
+
+        const checkDetails = {
+            'SPF Record': {
+                description: `<strong>SPF (Sender Policy Framework)</strong> is an email authentication method that specifies which mail servers are authorized to send email on behalf of your domain.`,
+                command: 'dig TXT {domain} +short | grep spf'
+            },
+            'DKIM Signature': {
+                description: `<strong>DKIM (DomainKeys Identified Mail)</strong> adds a digital signature to emails that verifies the message was sent from an authorized mail server.`,
+                command: 'dig TXT {selector}._domainkey.{domain} +short'
+            },
+            'DMARC Record': {
+                description: `<strong>DMARC</strong> builds on SPF and DKIM to provide domain owners with visibility and control over how their domain is used in email.`,
+                command: 'dig TXT _dmarc.{domain} +short'
+            },
+            'Reverse DNS': {
+                description: `<strong>Reverse DNS (PTR Record)</strong> maps an IP address back to a hostname.`,
+                command: 'dig -x {ip} +short'
+            },
+            'From Header': { description: `The <strong>From header</strong> identifies the author of the message.` },
+            'To Header': { description: `The <strong>To header</strong> specifies the primary recipients.` },
+            'Subject Header': { description: `The <strong>Subject header</strong> contains a short summary of the message.` },
+            'Date Header': { description: `The <strong>Date header</strong> indicates when the message was composed.` },
+            'Message-ID Header': { description: `The <strong>Message-ID header</strong> is a unique identifier for the email.` },
+            'Spam Content Check': { description: `Analyzes email content for common <strong>spam trigger words</strong>.` },
+            'HTML/Plain Text': { description: `Best practice is to send emails with both <strong>HTML and plain text</strong> versions.` }
+        };
+
+        function getStatusCharacter(score) {
+            if (score >= 9) {
+                // Excellent - A+
+                return {
+                    title: "EXCELLENT",
+                    subtitle: "All email authentication checks passed",
+                    svg: `<svg class="character-svg" viewBox="0 0 200 200">
+                        <defs>
+                            <linearGradient id="gradeA" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#22c55e"/>
+                                <stop offset="100%" style="stop-color:#15803d"/>
+                            </linearGradient>
+                        </defs>
+                        <circle cx="100" cy="100" r="70" fill="url(#gradeA)" opacity="0.15"/>
+                        <circle cx="100" cy="100" r="55" fill="url(#gradeA)" opacity="0.25"/>
+                        <circle cx="100" cy="100" r="45" fill="#1e293b" stroke="#22c55e" stroke-width="4"/>
+                        <path d="M75 100 L92 117 L125 84" stroke="#22c55e" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>`
+                };
+            } else if (score >= 7.5) {
+                // Good - A/B
+                return {
+                    title: "GOOD",
+                    subtitle: "Minor improvements recommended",
+                    svg: `<svg class="character-svg" viewBox="0 0 200 200">
+                        <defs>
+                            <linearGradient id="gradeB" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#3b82f6"/>
+                                <stop offset="100%" style="stop-color:#1d4ed8"/>
+                            </linearGradient>
+                        </defs>
+                        <circle cx="100" cy="100" r="70" fill="url(#gradeB)" opacity="0.15"/>
+                        <circle cx="100" cy="100" r="55" fill="url(#gradeB)" opacity="0.25"/>
+                        <circle cx="100" cy="100" r="45" fill="#1e293b" stroke="#3b82f6" stroke-width="4"/>
+                        <path d="M75 100 L92 117 L125 84" stroke="#3b82f6" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>`
+                };
+            } else if (score >= 6) {
+                // Fair - C
+                return {
+                    title: "FAIR",
+                    subtitle: "Some configuration issues detected",
+                    svg: `<svg class="character-svg" viewBox="0 0 200 200">
+                        <defs>
+                            <linearGradient id="gradeC" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#eab308"/>
+                                <stop offset="100%" style="stop-color:#a16207"/>
+                            </linearGradient>
+                        </defs>
+                        <circle cx="100" cy="100" r="70" fill="url(#gradeC)" opacity="0.15"/>
+                        <circle cx="100" cy="100" r="55" fill="url(#gradeC)" opacity="0.25"/>
+                        <circle cx="100" cy="100" r="45" fill="#1e293b" stroke="#eab308" stroke-width="4"/>
+                        <line x1="100" y1="75" x2="100" y2="105" stroke="#eab308" stroke-width="6" stroke-linecap="round"/>
+                        <circle cx="100" cy="120" r="4" fill="#eab308"/>
+                    </svg>`
+                };
+            } else if (score >= 4) {
+                // Poor - D
+                return {
+                    title: "POOR",
+                    subtitle: "Multiple issues need attention",
+                    svg: `<svg class="character-svg" viewBox="0 0 200 200">
+                        <defs>
+                            <linearGradient id="gradeD" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#f97316"/>
+                                <stop offset="100%" style="stop-color:#c2410c"/>
+                            </linearGradient>
+                        </defs>
+                        <circle cx="100" cy="100" r="70" fill="url(#gradeD)" opacity="0.15"/>
+                        <circle cx="100" cy="100" r="55" fill="url(#gradeD)" opacity="0.25"/>
+                        <circle cx="100" cy="100" r="45" fill="#1e293b" stroke="#f97316" stroke-width="4"/>
+                        <path d="M80 80 L120 120 M120 80 L80 120" stroke="#f97316" stroke-width="5" stroke-linecap="round"/>
+                    </svg>`
+                };
+            } else if (score >= 2) {
+                // Bad - F
+                return {
+                    title: "BAD",
+                    subtitle: "Critical configuration issues",
+                    svg: `<svg class="character-svg" viewBox="0 0 200 200">
+                        <defs>
+                            <linearGradient id="gradeF" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#ef4444"/>
+                                <stop offset="100%" style="stop-color:#b91c1c"/>
+                            </linearGradient>
+                        </defs>
+                        <circle cx="100" cy="100" r="70" fill="url(#gradeF)" opacity="0.15"/>
+                        <circle cx="100" cy="100" r="55" fill="url(#gradeF)" opacity="0.25"/>
+                        <circle cx="100" cy="100" r="45" fill="#1e293b" stroke="#ef4444" stroke-width="4"/>
+                        <path d="M80 80 L120 120 M120 80 L80 120" stroke="#ef4444" stroke-width="5" stroke-linecap="round"/>
+                    </svg>`
+                };
+            } else {
+                // Critical - Fail
+                return {
+                    title: "CRITICAL",
+                    subtitle: "Immediate action required",
+                    svg: `<svg class="character-svg" viewBox="0 0 200 200">
+                        <defs>
+                            <linearGradient id="gradeFail" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#dc2626"/>
+                                <stop offset="100%" style="stop-color:#7f1d1d"/>
+                            </linearGradient>
+                        </defs>
+                        <circle cx="100" cy="100" r="70" fill="url(#gradeFail)" opacity="0.15"/>
+                        <circle cx="100" cy="100" r="55" fill="url(#gradeFail)" opacity="0.25"/>
+                        <circle cx="100" cy="100" r="45" fill="#1e293b" stroke="#dc2626" stroke-width="4"/>
+                        <path d="M80 80 L120 120 M120 80 L80 120" stroke="#dc2626" stroke-width="6" stroke-linecap="round"/>
+                        <circle cx="100" cy="100" r="55" fill="none" stroke="#dc2626" stroke-width="2" stroke-dasharray="8 4"/>
+                    </svg>`
+                };
+            }
+        }
+
+        let currentTestId = null;
+        let checkInterval = null;
+
+        // Main tab switching
+        function showMainTab(tab) {
+            document.querySelectorAll('.main-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.main-content').forEach(c => c.classList.remove('active'));
+
+            document.querySelector(`.main-tab[onclick="showMainTab('${tab}')"]`).classList.add('active');
+            document.getElementById(tab === 'mxtest' ? 'mxtestContent' : 'toolsContent').classList.add('active');
+        }
+
+        // Tool selection
+        function selectTool(tool) {
+            selectedTool = tool;
+            document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+            document.querySelector(`.tool-btn[data-tool="${tool}"]`).classList.add('active');
+        }
+
+        // Run selected tool
+        async function runSelectedTool() {
+            const input = document.getElementById('toolsInput').value.trim();
+            if (!input) {
+                alert('Please enter a domain or IP address');
+                return;
+            }
+
+            document.getElementById('toolsResults').classList.remove('active');
+            document.getElementById('loadingTools').classList.add('active');
+
+            try {
+                const response = await fetch(`/api/tools/${selectedTool}?query=${encodeURIComponent(input)}`);
+                const data = await response.json();
+
+                document.getElementById('loadingTools').classList.remove('active');
+                displayToolResults(data);
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('loadingTools').classList.remove('active');
+                alert('Error running lookup. Please try again.');
+            }
+        }
+
+        // Display tool results
+        function displayToolResults(data) {
+            const resultsDiv = document.getElementById('toolsResults');
+            const titleEl = document.getElementById('toolsResultsTitle');
+            const domainEl = document.getElementById('toolsResultsDomain');
+            const contentEl = document.getElementById('toolsResultsContent');
+
+            titleEl.textContent = data.tool || 'Results';
+            domainEl.textContent = data.query || '';
+
+            let html = '';
+            const statusClass = data.status === 'success' ? 'pass' : (data.status === 'warning' ? 'warning' : 'fail');
+
+            if (data.error || (data.status === 'error' && data.message)) {
+                html = `<div class="result-row"><div class="result-value fail">${escapeHtml(data.error || data.message)}</div></div>`;
+            } else if (data.status === 'warning' && data.message) {
+                html = `<div class="result-row"><div class="result-value warning">${escapeHtml(data.message)}</div></div>`;
+            } else if (data.tool === 'MX Lookup' && data.records) {
+                html = '<div class="result-records">';
+                if (data.records.length > 0) {
+                    data.records.forEach(record => {
+                        html += `<div class="result-record"><span class="result-record-priority">${record.priority}</span>${escapeHtml(record.host)} <span style="color:#64748b;font-size:0.8rem;">(TTL: ${record.ttl})</span></div>`;
+                    });
+                }
+                html += '</div>';
+            } else if (data.tool === 'Blacklist Check' && data.records) {
+                html = '<div class="blacklist-grid">';
+                data.records.forEach(item => {
+                    html += `<div class="blacklist-item ${item.listed ? 'listed' : ''}">
+                        <div class="blacklist-status"></div>
+                        <span class="blacklist-name">${escapeHtml(item.blacklist)}</span>
+                    </div>`;
+                });
+                html += '</div>';
+                if (data.listed_count !== undefined) {
+                    html += `<div style="margin-top: 16px; color: ${data.listed_count > 0 ? '#ef4444' : '#22c55e'}; font-weight: 500;">
+                        ${data.message}
+                    </div>`;
+                }
+            } else if (data.tool === 'SOA Lookup' && data.records) {
+                const soa = data.records[0];
+                html = `<div class="result-records">
+                    <div class="result-row"><div class="result-label">Primary NS</div><div class="result-value">${escapeHtml(soa.mname)}</div></div>
+                    <div class="result-row"><div class="result-label">Admin Email</div><div class="result-value">${escapeHtml(soa.rname.replace('.', '@'))}</div></div>
+                    <div class="result-row"><div class="result-label">Serial</div><div class="result-value">${soa.serial}</div></div>
+                    <div class="result-row"><div class="result-label">Refresh</div><div class="result-value">${soa.refresh}s</div></div>
+                    <div class="result-row"><div class="result-label">Retry</div><div class="result-value">${soa.retry}s</div></div>
+                    <div class="result-row"><div class="result-label">Expire</div><div class="result-value">${soa.expire}s</div></div>
+                    <div class="result-row"><div class="result-label">Minimum TTL</div><div class="result-value">${soa.minimum}s</div></div>
+                </div>`;
+            } else if (data.tool && data.tool.includes('SPF') && data.records) {
+                html = '<div class="result-records">';
+                data.records.forEach(record => {
+                    html += `<div class="result-record">${escapeHtml(record.value)}</div>`;
+                    if (record.parsed) {
+                        html += `<div style="margin: 12px 0; padding: 12px; background: #1e293b; border-radius: 6px;">`;
+                        html += `<div class="check-info-grid">`;
+                        if (record.parsed.mechanisms.length > 0) {
+                            html += `<div class="check-info-item"><div class="check-info-label">Mechanisms</div><div class="check-info-value">${escapeHtml(record.parsed.mechanisms.join(' '))}</div></div>`;
+                        }
+                        if (record.parsed.modifiers.length > 0) {
+                            html += `<div class="check-info-item"><div class="check-info-label">Modifiers</div><div class="check-info-value">${escapeHtml(record.parsed.modifiers.join(' '))}</div></div>`;
+                        }
+                        html += `</div></div>`;
+                    }
+                });
+                html += '</div>';
+            } else if (data.tool && data.tool.includes('DMARC') && data.records) {
+                html = '<div class="result-records">';
+                data.records.forEach(record => {
+                    html += `<div class="result-record">${escapeHtml(record.value)}</div>`;
+                    if (record.parsed) {
+                        html += `<div style="margin: 12px 0; padding: 12px; background: #1e293b; border-radius: 6px;">`;
+                        html += `<div class="check-info-grid">`;
+                        for (const [key, val] of Object.entries(record.parsed)) {
+                            const labels = {v: 'Version', p: 'Policy', sp: 'Subdomain Policy', rua: 'Aggregate Reports', ruf: 'Forensic Reports', pct: 'Percentage', adkim: 'DKIM Alignment', aspf: 'SPF Alignment'};
+                            html += `<div class="check-info-item"><div class="check-info-label">${labels[key] || key}</div><div class="check-info-value">${escapeHtml(val)}</div></div>`;
+                        }
+                        html += `</div></div>`;
+                    }
+                });
+                html += '</div>';
+            } else if (data.tool && data.tool.includes('DKIM') && data.records) {
+                html = `<div style="margin-bottom: 12px; color: #22c55e;">Selector: ${escapeHtml(data.selector)}</div>`;
+                html += '<div class="result-records">';
+                data.records.forEach(record => {
+                    html += `<div class="result-record" style="word-break: break-all;">${escapeHtml(record.value)}</div>`;
+                });
+                html += '</div>';
+            } else if (data.tool === 'Reverse DNS (PTR)' && data.records) {
+                html = `<div class="result-row"><div class="result-label">IP Address</div><div class="result-value">${escapeHtml(data.query)}</div></div>`;
+                html += `<div class="result-row"><div class="result-label">Hostname</div><div class="result-value pass">${escapeHtml(data.records[0].hostname)}</div></div>`;
+            } else if (data.records) {
+                html = '<div class="result-records">';
+                data.records.forEach(record => {
+                    let displayVal = '';
+                    if (record.ip) displayVal = record.ip;
+                    else if (record.nameserver) displayVal = record.nameserver;
+                    else if (record.target) displayVal = record.target;
+                    else if (record.value) displayVal = record.value;
+                    else displayVal = JSON.stringify(record);
+
+                    const ttl = record.ttl ? ` <span style="color:#64748b;font-size:0.8rem;">(TTL: ${record.ttl})</span>` : '';
+                    html += `<div class="result-record">${escapeHtml(displayVal)}${ttl}</div>`;
+                });
+                html += '</div>';
+            } else {
+                html = `<pre class="result-record" style="white-space: pre-wrap;">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+            }
+
+            // Add command hint
+            if (data.command) {
+                html += `<div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #334155;">
+                    <div style="font-size: 0.75rem; color: #64748b; margin-bottom: 8px;">COMMAND</div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <code style="flex: 1; background: #0f172a; padding: 10px; border-radius: 4px; font-size: 0.85rem; color: #94a3b8;">${escapeHtml(data.command)}</code>
+                        <button class="copy-btn" onclick="navigator.clipboard.writeText('${escapeHtml(data.command)}')">Copy</button>
+                    </div>
+                </div>`;
+            }
+
+            contentEl.innerHTML = html;
+            resultsDiv.classList.add('active');
+        }
+
+        // MXtest functions
+        async function generateEmail() {
+            const btn = document.getElementById('generateBtn');
+            btn.disabled = true;
+            btn.textContent = 'Generating...';
+
+            try {
+                const response = await fetch('/api/generate', { method: 'POST' });
+                const data = await response.json();
+
+                currentTestId = data.test_id;
+
+                document.getElementById('generatedEmail').textContent = data.email;
+                document.getElementById('emailDisplay').classList.add('active');
+                document.getElementById('waiting').classList.add('active');
+                document.getElementById('results').classList.remove('active');
+
+                btn.textContent = 'Generate New Address';
+                btn.disabled = false;
+
+                startChecking();
+            } catch (error) {
+                console.error('Error:', error);
+                btn.textContent = 'Generate Test Email Address';
+                btn.disabled = false;
+            }
+        }
+
+        function startChecking() {
+            if (checkInterval) clearInterval(checkInterval);
+
+            checkInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/check/${currentTestId}`);
+                    const data = await response.json();
+
+                    if (data.received) {
+                        clearInterval(checkInterval);
+                        document.getElementById('waiting').classList.remove('active');
+                        displayResults(data.data);
+                    }
+                } catch (error) {
+                    console.error('Check error:', error);
+                }
+            }, 2000);
+        }
+
+        function toggleCheck(element) {
+            element.closest('.check-item').classList.toggle('expanded');
+        }
+
+        function copyCommand(btn, command) {
+            navigator.clipboard.writeText(command);
+            const originalText = btn.textContent;
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.textContent = originalText, 1500);
+        }
+
+        function displayResults(data) {
+            const results = document.getElementById('results');
+            results.classList.add('active');
+
+            const score = data.analysis.score.toFixed(1);
+            const scoreEl = document.getElementById('score');
+            scoreEl.textContent = `${score}/10`;
+            scoreEl.className = 'score';
+
+            if (score >= 8) scoreEl.classList.add('good');
+            else if (score >= 5) scoreEl.classList.add('medium');
+            else scoreEl.classList.add('bad');
+
+            const character = getStatusCharacter(parseFloat(score));
+            document.getElementById('statusCharacter').innerHTML = `
+                ${character.svg}
+                <div class="status-title">${character.title}</div>
+                <p class="status-subtitle">${character.subtitle}</p>
+            `;
+
+            const checksList = document.getElementById('checksList');
+            checksList.innerHTML = '';
+
+            const senderDomain = data.email.from ? data.email.from.split('@')[1] : '';
+            const senderIP = data.email.peer ? data.email.peer[0] : '';
+
+            data.analysis.checks.forEach((check, index) => {
+                const details = checkDetails[check.name] || {};
+                let command = details.command || '';
+                if (command) {
+                    command = command.replace('{domain}', senderDomain).replace('{ip}', senderIP);
+                }
+
+                let technicalInfo = '';
+                if (check.record) {
+                    technicalInfo = `<div class="check-technical"><div class="check-technical-title">Record</div><div class="check-code">${escapeHtml(check.record)}</div></div>`;
+                }
+
+                let commandHtml = '';
+                if (command) {
+                    commandHtml = `<div class="check-command"><code>${escapeHtml(command)}</code><button class="copy-cmd" onclick="event.stopPropagation(); copyCommand(this, '${escapeHtml(command)}')">Copy</button></div>`;
+                }
+
+                let infoGrid = '';
+                if (senderDomain || senderIP) {
+                    infoGrid = `<div class="check-info-grid">${senderDomain ? `<div class="check-info-item"><div class="check-info-label">Domain</div><div class="check-info-value">${escapeHtml(senderDomain)}</div></div>` : ''}${senderIP ? `<div class="check-info-item"><div class="check-info-label">Sender IP</div><div class="check-info-value">${escapeHtml(senderIP)}</div></div>` : ''}</div>`;
+                }
+
+                checksList.innerHTML += `
+                    <div class="check-item ${check.status}" id="check-${index}">
+                        <div class="check-header" onclick="toggleCheck(this)">
+                            <div class="check-icon">${icons[check.status]}</div>
+                            <div class="check-details">
+                                <div class="check-name">${escapeHtml(check.name)}</div>
+                                <div class="check-message">${escapeHtml(check.message)}</div>
+                            </div>
+                            <div class="check-expand">${icons.chevron}</div>
+                        </div>
+                        <div class="check-body">
+                            <div class="check-description">${details.description || 'No additional information available.'}</div>
+                            ${infoGrid}${technicalInfo}${commandHtml}
+                        </div>
+                    </div>
+                `;
+            });
+
+            const detailsEl = document.getElementById('emailDetails');
+            const email = data.email;
+            detailsEl.innerHTML = `
+                <div class="detail-group"><div class="detail-label">From</div><div class="detail-value">${escapeHtml(email.from)}</div></div>
+                <div class="detail-group"><div class="detail-label">To</div><div class="detail-value">${escapeHtml(email.to.join(', '))}</div></div>
+                <div class="detail-group"><div class="detail-label">Subject</div><div class="detail-value">${escapeHtml(email.subject)}</div></div>
+                <div class="detail-group"><div class="detail-label">Date</div><div class="detail-value">${escapeHtml(email.date)}</div></div>
+                <div class="detail-group"><div class="detail-label">Message ID</div><div class="detail-value">${escapeHtml(email.message_id)}</div></div>
+                <div class="detail-group"><div class="detail-label">Body</div><div class="detail-value">${escapeHtml(email.body_plain || email.body_html || '(empty)')}</div></div>
+            `;
+
+            const headersTable = document.getElementById('headersTable').querySelector('tbody');
+            headersTable.innerHTML = '';
+            for (const [key, value] of Object.entries(email.headers)) {
+                headersTable.innerHTML += `<tr><th>${escapeHtml(key)}</th><td>${escapeHtml(value)}</td></tr>`;
+            }
+
+            document.getElementById('rawEmail').textContent = email.raw;
+            results.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function showTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelector(`.tab[onclick="showTab('${tabName}')"]`).classList.add('active');
+            document.getElementById(`${tabName}Tab`).classList.add('active');
+        }
+
+        function copyEmail() {
+            const email = document.getElementById('generatedEmail').textContent;
+            navigator.clipboard.writeText(email);
+        }
+
+        // Full Domain Report with progressive streaming
+        async function runFullReport() {
+            const domain = document.getElementById('toolsInput').value.trim();
+            if (!domain) {
+                alert('Please enter a domain name');
+                return;
+            }
+
+            // Reset UI
+            document.getElementById('toolsResults').classList.remove('active');
+            document.getElementById('loadingTools').classList.add('active');
+            document.getElementById('loadingText').textContent = 'Starting domain analysis...';
+
+            // Initialize report structure
+            const report = {
+                domain: domain,
+                checks: {},
+                summary: { total: 0, passed: 0, warnings: 0, errors: 0, score: 0 }
+            };
+
+            // Show results container immediately
+            document.getElementById('reportChecks').innerHTML = '';
+            document.getElementById('summaryScore').textContent = '...';
+            document.getElementById('statPassed').textContent = '0';
+            document.getElementById('statWarnings').textContent = '0';
+            document.getElementById('statErrors').textContent = '0';
+            document.getElementById('summaryDomain').textContent = domain;
+            document.getElementById('toolsResults').classList.add('active');
+
+            try {
+                // Use EventSource for Server-Sent Events streaming
+                const eventSource = new EventSource(`/api/tools/report/stream?query=${encodeURIComponent(domain)}`);
+
+                eventSource.addEventListener('start', function(e) {
+                    const data = JSON.parse(e.data);
+                    document.getElementById('loadingText').textContent = `Analyzing ${data.domain}... (0/${data.total_checks})`;
+                });
+
+                eventSource.addEventListener('check', function(e) {
+                    const data = JSON.parse(e.data);
+                    const checkName = data.name;
+                    const result = data.result;
+
+                    // Store result
+                    report.checks[checkName] = result;
+
+                    // Update progress
+                    document.getElementById('loadingText').textContent = `Running checks... (${data.progress}/11)`;
+
+                    // Update summary counters
+                    const status = result.status || 'error';
+                    if (status === 'success') {
+                        report.summary.passed++;
+                    } else if (status === 'warning') {
+                        report.summary.warnings++;
+                    } else {
+                        report.summary.errors++;
+                    }
+                    report.summary.total++;
+
+                    // Update summary display
+                    document.getElementById('statPassed').textContent = report.summary.passed;
+                    document.getElementById('statWarnings').textContent = report.summary.warnings;
+                    document.getElementById('statErrors').textContent = report.summary.errors;
+
+                    // Calculate and update score
+                    if (report.summary.total > 0) {
+                        const baseScore = (report.summary.passed / report.summary.total) * 100;
+                        const warningPenalty = report.summary.warnings * 5;
+                        report.summary.score = Math.max(0, Math.round(baseScore - warningPenalty));
+                        const scoreEl = document.getElementById('summaryScore');
+                        scoreEl.textContent = report.summary.score;
+                        scoreEl.className = 'summary-score-value';
+                        if (report.summary.score < 50) scoreEl.classList.add('error');
+                        else if (report.summary.score < 80) scoreEl.classList.add('warning');
+                    }
+
+                    // Add check to UI immediately
+                    addCheckToReport(checkName, result);
+                });
+
+                eventSource.addEventListener('complete', function(e) {
+                    eventSource.close();
+                    document.getElementById('loadingTools').classList.remove('active');
+
+                    // Scroll to results
+                    document.getElementById('toolsResults').scrollIntoView({ behavior: 'smooth' });
+                });
+
+                eventSource.onerror = function(e) {
+                    eventSource.close();
+                    document.getElementById('loadingTools').classList.remove('active');
+
+                    // If we have some results, show them
+                    if (Object.keys(report.checks).length > 0) {
+                        console.log('Stream ended with partial results');
+                    } else {
+                        // Fallback to non-streaming endpoint
+                        runFullReportFallback(domain);
+                    }
+                };
+
+            } catch (error) {
+                console.error('Error:', error);
+                // Fallback to non-streaming endpoint
+                runFullReportFallback(domain);
+            }
+        }
+
+        // Fallback to non-streaming endpoint
+        async function runFullReportFallback(domain) {
+            try {
+                const response = await fetch(`/api/tools/report?query=${encodeURIComponent(domain)}`);
+                const data = await response.json();
+
+                document.getElementById('loadingTools').classList.remove('active');
+
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                    return;
+                }
+
+                displayFullReport(data);
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('loadingTools').classList.remove('active');
+                alert('Error running report. Please try again.');
+            }
+        }
+
+        // Add a single check to the report UI
+        function addCheckToReport(checkName, check) {
+            const checksDiv = document.getElementById('reportChecks');
+
+            const statusIcon = check.status === 'success' ? icons.pass :
+                               check.status === 'warning' ? icons.warning : icons.fail;
+
+            const bodyContent = buildCheckBody(checkName, check);
+
+            const checkDiv = document.createElement('div');
+            checkDiv.className = 'report-check';
+            checkDiv.setAttribute('data-check', checkName);
+            checkDiv.style.animation = 'fadeIn 0.3s ease';
+            checkDiv.innerHTML = `
+                <div class="report-check-header" onclick="this.parentElement.classList.toggle('expanded')">
+                    <div class="report-check-status ${check.status}">${statusIcon}</div>
+                    <div class="report-check-info">
+                        <div class="report-check-title">${check.tool || checkName.toUpperCase()}</div>
+                        <div class="report-check-message">${escapeHtml(check.message || getStatusMessage(check))}</div>
+                    </div>
+                    <div class="report-check-expand">${icons.chevron}</div>
+                </div>
+                <div class="report-check-body">
+                    ${bodyContent}
+                </div>
+            `;
+
+            checksDiv.appendChild(checkDiv);
+        }
+
+        function displayFullReport(report) {
+            const resultsDiv = document.getElementById('toolsResults');
+
+            // Update summary
+            const score = report.summary.score;
+            const scoreEl = document.getElementById('summaryScore');
+            scoreEl.textContent = score;
+            scoreEl.className = 'summary-score-value';
+            if (score < 50) scoreEl.classList.add('error');
+            else if (score < 80) scoreEl.classList.add('warning');
+
+            document.getElementById('statPassed').textContent = report.summary.passed;
+            document.getElementById('statWarnings').textContent = report.summary.warnings;
+            document.getElementById('statErrors').textContent = report.summary.errors;
+            document.getElementById('summaryDomain').textContent = report.domain;
+
+            // Build checks HTML
+            const checksDiv = document.getElementById('reportChecks');
+            checksDiv.innerHTML = '';
+
+            const checkOrder = ['mx', 'a', 'aaaa', 'ns', 'spf', 'dkim', 'dmarc', 'smtp', 'autodiscover', 'blacklist', 'txt'];
+
+            for (const checkName of checkOrder) {
+                const check = report.checks[checkName];
+                if (!check) continue;
+
+                const statusIcon = check.status === 'success' ? icons.pass :
+                                   check.status === 'warning' ? icons.warning : icons.fail;
+
+                let bodyContent = buildCheckBody(checkName, check);
+
+                checksDiv.innerHTML += `
+                    <div class="report-check" data-check="${checkName}">
+                        <div class="report-check-header" onclick="this.parentElement.classList.toggle('expanded')">
+                            <div class="report-check-status ${check.status}">${statusIcon}</div>
+                            <div class="report-check-info">
+                                <div class="report-check-title">${check.tool || checkName.toUpperCase()}</div>
+                                <div class="report-check-message">${escapeHtml(check.message || getStatusMessage(check))}</div>
+                            </div>
+                            <div class="report-check-expand">${icons.chevron}</div>
+                        </div>
+                        <div class="report-check-body">
+                            ${bodyContent}
+                        </div>
+                    </div>
+                `;
+            }
+
+            resultsDiv.classList.add('active');
+            resultsDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function getStatusMessage(check) {
+            if (check.status === 'success') {
+                if (check.records) return `${check.records.length} record(s) found`;
+                return 'Check passed';
+            } else if (check.status === 'warning') {
+                return check.message || 'Warning';
+            } else {
+                return check.message || 'Check failed';
+            }
+        }
+
+        function buildCheckBody(checkName, check) {
+            let html = '<div class="check-data">';
+
+            // MX Records with IPs
+            if (checkName === 'mx' && check.records && check.records.length > 0) {
+                html += '<div class="check-data-section"><div class="check-data-title">MX Records</div><div class="check-data-records">';
+                check.records.forEach(r => {
+                    let ips = '';
+                    if (r.ips && r.ips.length > 0) {
+                        ips = `<div style="color:#64748b;font-size:0.8rem;margin-top:4px;">IPv4: ${r.ips.join(', ')}</div>`;
+                    }
+                    if (r.ipv6 && r.ipv6.length > 0) {
+                        ips += `<div style="color:#64748b;font-size:0.8rem;">IPv6: ${r.ipv6.join(', ')}</div>`;
+                    }
+                    html += `<div class="check-data-record"><span class="priority">${r.priority}</span>${escapeHtml(r.host)}<span class="ttl">TTL: ${r.ttl}</span>${ips}</div>`;
+                });
+                html += '</div></div>';
+            }
+            // DKIM with multiple selectors
+            else if (checkName === 'dkim' && check.records && check.records.length > 0) {
+                html += `<div class="check-data-section"><div class="check-data-title">DKIM Records Found</div>`;
+                if (check.selectors_found && check.selectors_found.length > 0) {
+                    html += `<div style="margin-bottom:12px;color:#22c55e;">Selectors: ${check.selectors_found.join(', ')}</div>`;
+                }
+                html += '<div class="check-data-records">';
+                check.records.forEach(r => {
+                    html += `<div class="check-data-record" style="margin-bottom:12px;">
+                        <div style="color:#3b82f6;font-weight:600;margin-bottom:4px;">${escapeHtml(r.selector)}._domainkey</div>
+                        <div style="word-break:break-all;font-size:0.8rem;">${escapeHtml(r.value)}</div>
+                    </div>`;
+                });
+                html += '</div></div>';
+            }
+            // SPF with includes
+            else if (checkName === 'spf' && check.records && check.records.length > 0) {
+                html += '<div class="check-data-section"><div class="check-data-title">SPF Record</div><div class="check-data-records">';
+                check.records.forEach(r => {
+                    html += `<div class="check-data-record" style="word-break:break-all;">${escapeHtml(r.value)}</div>`;
+                    if (r.includes && r.includes.length > 0) {
+                        html += '<div style="margin-top:12px;"><div class="check-data-title">Included SPF Records</div>';
+                        r.includes.forEach(inc => {
+                            const incStatus = inc.error ? 'error' : 'success';
+                            html += `<div class="check-data-record" style="margin-top:8px;">
+                                <div style="color:#3b82f6;font-weight:500;">${inc.type === 'redirect' ? 'redirect=' : 'include:'}${escapeHtml(inc.domain)}</div>
+                                ${inc.record ? `<div style="color:#94a3b8;font-size:0.8rem;margin-top:4px;word-break:break-all;">${escapeHtml(inc.record.value || '')}</div>` : ''}
+                                ${inc.error ? `<div style="color:#ef4444;font-size:0.8rem;margin-top:4px;">${escapeHtml(inc.error)}</div>` : ''}
+                            </div>`;
+                        });
+                        html += '</div>';
+                    }
+                });
+                html += '</div></div>';
+            }
+            // SMTP with full connection logs
+            else if (checkName === 'smtp' && check.results && check.results.length > 0) {
+                html += '<div class="check-data-section"><div class="check-data-title">SMTP Connectivity Tests</div>';
+                html += `<div style="margin-bottom:12px;color:#94a3b8;">${check.mx_successful || 0} of ${check.mx_count || 0} MX servers responding</div>`;
+
+                check.results.forEach(mx => {
+                    html += `<div style="background:#0f172a;border-radius:8px;padding:16px;margin-bottom:12px;">
+                        <div style="font-weight:600;color:#f8fafc;margin-bottom:8px;">${escapeHtml(mx.host)} <span style="color:#64748b;font-weight:400;">(Priority: ${mx.priority})</span></div>`;
+                    if (mx.ips && mx.ips.length > 0) {
+                        html += `<div style="color:#64748b;font-size:0.85rem;margin-bottom:12px;">IPs: ${mx.ips.join(', ')}</div>`;
+                    }
+
+                    // Show each port test
+                    html += '<div class="smtp-results" style="grid-template-columns: repeat(3, 1fr);">';
+                    for (const [port, portResult] of Object.entries(mx.ports || {})) {
+                        const statusClass = portResult.status === 'success' ? 'success' : (portResult.status === 'warning' ? 'warning' : 'error');
+                        const statusColor = statusClass === 'success' ? '#22c55e' : (statusClass === 'warning' ? '#f59e0b' : '#ef4444');
+                        html += `<div class="smtp-result">
+                            <div class="smtp-result-header">
+                                <span class="smtp-result-port">${portResult.port_name || 'Port ' + port}</span>
+                            </div>
+                            <div class="smtp-result-status" style="color:${statusColor};">
+                                ${portResult.connection ? (portResult.ehlo_supported ? 'EHLO OK' : (portResult.helo_supported ? 'HELO Only' : 'Connected')) : 'Failed'}
+                            </div>
+                            ${portResult.starttls ? '<div style="color:#22c55e;font-size:0.75rem;">✓ STARTTLS</div>' : ''}
+                            ${portResult.capabilities && portResult.capabilities.length > 0 ? `<div style="color:#64748b;font-size:0.7rem;margin-top:4px;">${portResult.capabilities.slice(0,3).join(', ')}${portResult.capabilities.length > 3 ? '...' : ''}</div>` : ''}
+                        </div>`;
+                    }
+                    html += '</div>';
+
+                    // Show transcript for port 25 if available
+                    const port25 = mx.ports && mx.ports['25'];
+                    if (port25 && port25.transcript && port25.transcript.length > 0) {
+                        html += `<details style="margin-top:12px;"><summary style="cursor:pointer;color:#3b82f6;font-size:0.85rem;">View Connection Log</summary>
+                        <div style="background:#1e293b;border-radius:6px;padding:12px;margin-top:8px;font-family:monospace;font-size:0.75rem;">`;
+                        port25.transcript.forEach(t => {
+                            const color = t.direction === 'send' ? '#3b82f6' : (t.direction === 'recv' ? '#22c55e' : '#64748b');
+                            const prefix = t.direction === 'send' ? '>>> ' : (t.direction === 'recv' ? '<<< ' : '--- ');
+                            html += `<div style="color:${color};white-space:pre-wrap;word-break:break-all;">${prefix}${escapeHtml(t.data)}</div>`;
+                        });
+                        html += '</div></details>';
+                    }
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+            // Autodiscover with certificate status
+            else if (checkName === 'autodiscover' && check.checks && check.checks.length > 0) {
+                // Group checks by type
+                const dnsChecks = check.checks.filter(c => c.type === 'dns');
+                const sslChecks = check.checks.filter(c => c.type === 'ssl');
+                const httpChecks = check.checks.filter(c => c.type === 'http');
+
+                if (dnsChecks.length > 0) {
+                    html += '<div class="check-data-section"><div class="check-data-title">DNS Records</div><div class="autodiscover-checks">';
+                    dnsChecks.forEach(c => {
+                        html += `<div class="autodiscover-check">
+                            <div class="autodiscover-check-status ${c.status}"></div>
+                            <span class="autodiscover-check-name">${escapeHtml(c.name)}</span>
+                            <span class="autodiscover-check-target" style="flex:1;">${escapeHtml(c.message || '')}</span>
+                        </div>`;
+                    });
+                    html += '</div></div>';
+                }
+
+                if (sslChecks.length > 0) {
+                    html += '<div class="check-data-section"><div class="check-data-title">SSL Certificates</div><div class="autodiscover-checks">';
+                    sslChecks.forEach(c => {
+                        const cert = c.certificate || {};
+                        let certDetails = '';
+                        if (cert.subject) {
+                            certDetails = `<div style="font-size:0.8rem;color:#64748b;margin-top:4px;">
+                                Subject: ${escapeHtml(cert.subject)}<br>
+                                Issuer: ${escapeHtml(cert.issuer || 'Unknown')}<br>
+                                ${cert.days_remaining !== null ? `Expires in: ${cert.days_remaining} days` : ''}
+                                ${cert.trusted ? ' <span style="color:#22c55e;">✓ Trusted</span>' : ' <span style="color:#f59e0b;">⚠ Untrusted</span>'}
+                            </div>`;
+                        }
+                        html += `<div class="autodiscover-check" style="flex-direction:column;align-items:flex-start;">
+                            <div style="display:flex;align-items:center;gap:12px;width:100%;">
+                                <div class="autodiscover-check-status ${c.status}"></div>
+                                <span class="autodiscover-check-name">${escapeHtml(c.name)}</span>
+                            </div>
+                            <div style="margin-left:20px;color:#94a3b8;font-size:0.85rem;">${escapeHtml(c.message || '')}</div>
+                            ${certDetails}
+                        </div>`;
+                    });
+                    html += '</div></div>';
+                }
+
+                if (httpChecks.length > 0) {
+                    html += '<div class="check-data-section"><div class="check-data-title">HTTP Endpoints</div><div class="autodiscover-checks">';
+                    httpChecks.forEach(c => {
+                        html += `<div class="autodiscover-check">
+                            <div class="autodiscover-check-status ${c.status}"></div>
+                            <span class="autodiscover-check-name" style="flex:1;word-break:break-all;font-size:0.8rem;">${escapeHtml(c.target || '')}</span>
+                            <span style="color:${c.status === 'success' ? '#22c55e' : '#ef4444'};font-size:0.85rem;">${escapeHtml(c.message || '')}</span>
+                        </div>`;
+                    });
+                    html += '</div></div>';
+                }
+            }
+            // Blacklist
+            else if (checkName === 'blacklist' && check.records && check.records.length > 0) {
+                html += '<div class="check-data-section"><div class="check-data-title">Blacklist Status</div>';
+                if (check.checked_host) {
+                    html += `<div style="color:#64748b;font-size:0.85rem;margin-bottom:12px;">Checked: ${escapeHtml(check.checked_host)} (${escapeHtml(check.checked_ip || '')})</div>`;
+                }
+                html += '<div class="blacklist-grid">';
+                check.records.forEach(r => {
+                    html += `<div class="blacklist-item ${r.listed ? 'listed' : ''}"><div class="blacklist-status"></div><span class="blacklist-name">${escapeHtml(r.blacklist)}</span></div>`;
+                });
+                html += '</div></div>';
+            }
+            // Generic records
+            else if (check.records && check.records.length > 0) {
+                html += '<div class="check-data-section"><div class="check-data-title">Records</div><div class="check-data-records">';
+                check.records.forEach(r => {
+                    let val = r.ip || r.nameserver || r.target || r.value || r.hostname || JSON.stringify(r);
+                    const ttl = r.ttl ? `<span class="ttl">TTL: ${r.ttl}</span>` : '';
+                    html += `<div class="check-data-record">${escapeHtml(val)}${ttl}</div>`;
+                });
+                html += '</div></div>';
+            }
+
+            // Command
+            if (check.command) {
+                html += `<div class="check-data-section">
+                    <div class="check-data-title">Command</div>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <code style="flex:1;background:#0f172a;padding:10px 14px;border-radius:6px;font-size:0.85rem;color:#94a3b8;">${escapeHtml(check.command)}</code>
+                        <button class="copy-btn" onclick="navigator.clipboard.writeText('${escapeHtml(check.command)}')">Copy</button>
+                    </div>
+                </div>`;
+            }
+
+            // RFC Tip
+            if (check.rfc) {
+                const rfc = check.rfc;
+                html += `<div class="rfc-tip">
+                    <div class="rfc-tip-header">
+                        <span class="rfc-tip-badge">${escapeHtml(rfc.rfc)}</span>
+                        <span class="rfc-tip-title">${escapeHtml(rfc.title)}</span>
+                    </div>
+                    <div class="rfc-tip-content">${escapeHtml(rfc.tip)}</div>
+                    ${check.status !== 'success' ? `<div class="rfc-tip-fix"><div class="rfc-tip-fix-label">HOW TO FIX</div><div class="rfc-tip-content">${escapeHtml(rfc.fix)}</div></div>` : ''}
+                </div>`;
+            }
+
+            html += '</div>';
+            return html;
+        }
+
+        function toggleReportCheck(element) {
+            element.closest('.report-check').classList.toggle('expanded');
+        }
+    </script>
+</body>
+</html>
