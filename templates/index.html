@@ -2167,6 +2167,66 @@
                 html += '</div></div>';
             }
 
+            // Authoritative NS Comparison
+            if (check.authoritative) {
+                const auth = check.authoritative;
+                html += `<div class="check-data-section">
+                    <div class="check-data-title" style="display:flex;align-items:center;gap:8px;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                        </svg>
+                        Authoritative NS Comparison
+                    </div>`;
+
+                if (auth.nameserver) {
+                    html += `<div style="color:#64748b;font-size:0.85rem;margin-bottom:12px;">
+                        Queried: <span style="color:#3b82f6;">${escapeHtml(auth.nameserver)}</span>
+                        ${auth.nameserver_ip ? ` (${escapeHtml(auth.nameserver_ip)})` : ''}
+                    </div>`;
+                }
+
+                if (auth.records && auth.records.length > 0) {
+                    html += '<div class="check-data-records" style="margin-bottom:12px;">';
+                    auth.records.forEach(r => {
+                        const val = r.value || r.ip || r.host || JSON.stringify(r);
+                        const ttl = r.ttl ? `<span class="ttl">TTL: ${r.ttl}</span>` : '';
+                        html += `<div class="check-data-record" style="border-left:3px solid #3b82f6;">${escapeHtml(val)}${ttl}</div>`;
+                    });
+                    html += '</div>';
+                }
+
+                if (auth.error) {
+                    html += `<div style="color:#f59e0b;font-size:0.85rem;margin-bottom:12px;">
+                        ⚠ Could not query authoritative NS: ${escapeHtml(auth.error)}
+                    </div>`;
+                }
+
+                html += '</div>';
+            }
+
+            // Differences between public DNS and authoritative NS
+            if (check.differences && check.differences.length > 0) {
+                html += `<div class="check-data-section" style="border:1px solid #f59e0b;border-radius:8px;">
+                    <div class="check-data-title" style="display:flex;align-items:center;gap:8px;color:#f59e0b;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                        </svg>
+                        DNS Propagation Differences Detected
+                    </div>
+                    <div style="color:#94a3b8;font-size:0.85rem;margin-bottom:12px;">
+                        Records from public DNS servers differ from authoritative nameserver
+                    </div>
+                    <div class="check-data-records">`;
+                check.differences.forEach(diff => {
+                    html += `<div class="check-data-record" style="background:#1e293b;border-left:3px solid #f59e0b;">
+                        <div style="color:#f59e0b;font-weight:500;margin-bottom:4px;">${escapeHtml(diff.type || 'Difference')}</div>
+                        <div style="color:#64748b;font-size:0.8rem;">${escapeHtml(diff.message || diff)}</div>
+                    </div>`;
+                });
+                html += '</div></div>';
+            }
+
             // Command
             if (check.command) {
                 html += `<div class="check-data-section">

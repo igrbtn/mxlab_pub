@@ -1,18 +1,7 @@
 #!/usr/bin/env python3
 """
-MXLab - Email Deliverability & DNS Analysis Tool
-A comprehensive mail-tester.com alternative for analyzing email configuration.
-
-Features:
-- Dynamic test email generation
-- SPF, DKIM, DMARC verification
-- MX record analysis with IP resolution
-- SMTP connectivity testing
-- Autodiscover configuration checking
-- Blacklist monitoring
-- Real-time streaming results
-
-License: MIT
+Mail Tester - A mail-tester.com analog
+Generates dynamic email addresses, receives emails via SMTP, and analyzes them.
 """
 
 import asyncio
@@ -38,6 +27,10 @@ from aiosmtpd.smtp import SMTP as SMTPServer
 # Try to import optional analysis libraries
 try:
     import dns.resolver
+    import dns.query
+    import dns.message
+    import dns.rdatatype
+    import dns.name
     DNS_AVAILABLE = True
 except ImportError:
     DNS_AVAILABLE = False
@@ -48,22 +41,115 @@ try:
 except ImportError:
     DKIM_AVAILABLE = False
 
+
+def create_resolver(use_cache=False):
+    """Create a DNS resolver with optional caching disabled."""
+    resolver = dns.resolver.Resolver()
+    resolver.cache = dns.resolver.Cache() if use_cache else dns.resolver.LRUCache(0)
+    resolver.lifetime = 10  # 10 second timeout
+    return resolver
+
+
+def get_authoritative_nameservers(domain):
+    """Get the authoritative nameservers for a domain."""
+    try:
+        resolver = create_resolver()
+        # Get the zone's NS records
+        # First try to get NS for the exact domain
+        try:
+            ns_answers = resolver.resolve(domain, 'NS')
+            nameservers = []
+            for ns in ns_answers:
+                ns_name = str(ns.target).rstrip('.')
+                try:
+                    # Resolve NS to IP
+                    a_answers = resolver.resolve(ns_name, 'A')
+                    for a in a_answers:
+                        nameservers.append({'name': ns_name, 'ip': str(a)})
+                        break  # Just need one IP per NS
+                except:
+                    pass
+            return nameservers
+        except dns.resolver.NoAnswer:
+            # Try parent domain
+            parts = domain.split('.')
+            if len(parts) > 2:
+                parent = '.'.join(parts[1:])
+                return get_authoritative_nameservers(parent)
+        except dns.resolver.NXDOMAIN:
+            return []
+    except Exception as e:
+        print(f"[DNS] Error getting authoritative NS: {e}")
+        return []
+    return []
+
+
+def query_authoritative(domain, rdtype, nameserver_ip):
+    """Query a specific nameserver directly for DNS records."""
+    try:
+        qname = dns.name.from_text(domain)
+        request = dns.message.make_query(qname, rdtype)
+        response = dns.query.udp(request, nameserver_ip, timeout=5)
+
+        records = []
+        for rrset in response.answer:
+            if rrset.rdtype == dns.rdatatype.from_text(rdtype):
+                for rdata in rrset:
+                    records.append({
+                        'value': str(rdata),
+                        'ttl': rrset.ttl
+                    })
+        return records
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def compare_dns_results(public_records, auth_records):
+    """Compare public DNS results with authoritative NS results."""
+    differences = []
+
+    # Normalize records for comparison
+    def normalize(records):
+        if isinstance(records, dict) and 'error' in records:
+            return set()
+        return set(r.get('value', r.get('host', r.get('ip', str(r)))) for r in records if isinstance(r, dict))
+
+    public_set = normalize(public_records) if public_records else set()
+    auth_set = normalize(auth_records) if auth_records else set()
+
+    only_in_public = public_set - auth_set
+    only_in_auth = auth_set - public_set
+
+    if only_in_public:
+        differences.append({
+            'type': 'public_only',
+            'message': 'Records in public DNS but not in authoritative NS',
+            'records': list(only_in_public)
+        })
+
+    if only_in_auth:
+        differences.append({
+            'type': 'auth_only',
+            'message': 'Records in authoritative NS but not in public DNS (propagation pending)',
+            'records': list(only_in_auth)
+        })
+
+    return differences
+
 # Configuration from environment variables
 SMTP_PORT = int(os.environ.get('SMTP_PORT', 25))
 WEB_PORT = int(os.environ.get('WEB_PORT', 5000))
 DOMAIN = os.environ.get('DOMAIN', 'localhost')
 
 # Telegram notification configuration (optional)
-# Set these environment variables to enable Telegram notifications
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 
 
 async def send_telegram_notification(test_id, email_data, analysis):
     """Send silent notification to Telegram about received email."""
-    # Skip if Telegram not configured
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+        return  # Telegram not configured, skip notification
     try:
         score = analysis.get('score', 0)
         sender = email_data.get('from', 'Unknown')
@@ -117,9 +203,8 @@ async def send_telegram_notification(test_id, email_data, analysis):
 
 async def send_telegram_report_notification(domain, summary, client_ip):
     """Send silent notification to Telegram about MXlab Lookup."""
-    # Skip if Telegram not configured
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+        return  # Telegram not configured, skip notification
     try:
         score = summary.get('score', 0)
         passed = summary.get('passed', 0)
@@ -726,9 +811,21 @@ def run_tool(tool):
 
 
 def tool_mx_lookup(domain):
-    """Look up MX records for a domain with IP resolution."""
+    """Look up MX records for a domain with IP resolution. Compares public DNS with authoritative NS."""
+    resolver = create_resolver(use_cache=False)
+    result = {
+        'tool': 'MX Lookup',
+        'query': domain,
+        'status': 'error',
+        'records': [],
+        'authoritative': None,
+        'differences': [],
+        'command': f'dig {domain} MX +short'
+    }
+
     try:
-        answers = dns.resolver.resolve(domain, 'MX')
+        # Query public DNS (no cache)
+        answers = resolver.resolve(domain, 'MX')
         records = []
         for rdata in answers:
             mx_host = str(rdata.exchange).rstrip('.')
@@ -741,81 +838,193 @@ def tool_mx_lookup(domain):
             }
             # Resolve A records for MX host
             try:
-                a_answers = dns.resolver.resolve(mx_host, 'A')
+                a_answers = resolver.resolve(mx_host, 'A')
                 record['ips'] = [str(r) for r in a_answers]
             except:
                 pass
             # Resolve AAAA records for MX host
             try:
-                aaaa_answers = dns.resolver.resolve(mx_host, 'AAAA')
+                aaaa_answers = resolver.resolve(mx_host, 'AAAA')
                 record['ipv6'] = [str(r) for r in aaaa_answers]
             except:
                 pass
             records.append(record)
         records.sort(key=lambda x: x['priority'])
-        return {
-            'tool': 'MX Lookup',
-            'query': domain,
-            'status': 'success',
-            'records': records,
-            'count': len(records),
-            'command': f'dig {domain} MX +short'
-        }
+        result['records'] = records
+        result['count'] = len(records)
+        result['status'] = 'success'
+
+        # Query authoritative nameservers
+        auth_ns = get_authoritative_nameservers(domain)
+        if auth_ns:
+            result['authoritative'] = {'nameservers': auth_ns, 'records': []}
+            for ns in auth_ns[:2]:  # Query first 2 NS
+                auth_records = query_authoritative(domain, 'MX', ns['ip'])
+                if isinstance(auth_records, list) and auth_records:
+                    result['authoritative']['records'] = auth_records
+                    result['authoritative']['queried_ns'] = ns['name']
+                    break
+
+            # Compare results
+            if result['authoritative']['records']:
+                public_hosts = [r['host'] for r in records]
+                auth_hosts = [r['value'].split()[-1].rstrip('.') if ' ' in r['value'] else r['value'].rstrip('.') for r in result['authoritative']['records']]
+
+                only_public = set(public_hosts) - set(auth_hosts)
+                only_auth = set(auth_hosts) - set(public_hosts)
+
+                if only_public or only_auth:
+                    result['differences'] = []
+                    if only_public:
+                        result['differences'].append({
+                            'type': 'public_only',
+                            'message': 'In public DNS only (may be cached/outdated)',
+                            'records': list(only_public)
+                        })
+                    if only_auth:
+                        result['differences'].append({
+                            'type': 'auth_only',
+                            'message': 'In authoritative NS only (propagation pending)',
+                            'records': list(only_auth)
+                        })
+                    result['status'] = 'warning'
+
+        return result
     except dns.resolver.NXDOMAIN:
-        return {'tool': 'MX Lookup', 'query': domain, 'status': 'error', 'message': 'Domain not found'}
+        result['message'] = 'Domain not found'
+        return result
     except dns.resolver.NoAnswer:
-        return {'tool': 'MX Lookup', 'query': domain, 'status': 'warning', 'message': 'No MX records found'}
+        result['status'] = 'warning'
+        result['message'] = 'No MX records found'
+        return result
     except Exception as e:
-        return {'tool': 'MX Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+        result['message'] = str(e)
+        return result
 
 
 def tool_a_lookup(domain):
-    """Look up A records for a domain."""
+    """Look up A records for a domain with authoritative comparison."""
+    resolver = create_resolver(use_cache=False)
+    result = {
+        'tool': 'DNS (A) Lookup',
+        'query': domain,
+        'status': 'error',
+        'records': [],
+        'authoritative': None,
+        'differences': [],
+        'command': f'dig {domain} A +short'
+    }
+
     try:
-        answers = dns.resolver.resolve(domain, 'A')
+        answers = resolver.resolve(domain, 'A')
         records = [{'ip': str(rdata), 'ttl': answers.rrset.ttl} for rdata in answers]
-        return {
-            'tool': 'DNS (A) Lookup',
-            'query': domain,
-            'status': 'success',
-            'records': records,
-            'count': len(records),
-            'command': f'dig {domain} A +short'
-        }
+        result['records'] = records
+        result['count'] = len(records)
+        result['status'] = 'success'
+
+        # Query authoritative NS
+        auth_ns = get_authoritative_nameservers(domain)
+        if auth_ns:
+            result['authoritative'] = {'nameservers': auth_ns, 'records': []}
+            for ns in auth_ns[:2]:
+                auth_records = query_authoritative(domain, 'A', ns['ip'])
+                if isinstance(auth_records, list) and auth_records:
+                    result['authoritative']['records'] = auth_records
+                    result['authoritative']['queried_ns'] = ns['name']
+                    break
+
+            # Compare
+            if result['authoritative']['records']:
+                public_ips = set(r['ip'] for r in records)
+                auth_ips = set(r['value'] for r in result['authoritative']['records'])
+                if public_ips != auth_ips:
+                    result['differences'] = []
+                    only_public = public_ips - auth_ips
+                    only_auth = auth_ips - public_ips
+                    if only_public:
+                        result['differences'].append({'type': 'public_only', 'message': 'In public DNS only', 'records': list(only_public)})
+                    if only_auth:
+                        result['differences'].append({'type': 'auth_only', 'message': 'In authoritative NS only', 'records': list(only_auth)})
+                    result['status'] = 'warning'
+
+        return result
     except dns.resolver.NXDOMAIN:
-        return {'tool': 'DNS (A) Lookup', 'query': domain, 'status': 'error', 'message': 'Domain not found'}
+        result['message'] = 'Domain not found'
+        return result
     except dns.resolver.NoAnswer:
-        return {'tool': 'DNS (A) Lookup', 'query': domain, 'status': 'warning', 'message': 'No A records found'}
+        result['status'] = 'warning'
+        result['message'] = 'No A records found'
+        return result
     except Exception as e:
-        return {'tool': 'DNS (A) Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+        result['message'] = str(e)
+        return result
 
 
 def tool_txt_lookup(domain):
-    """Look up TXT records for a domain."""
+    """Look up TXT records for a domain with authoritative comparison."""
+    resolver = create_resolver(use_cache=False)
+    result = {
+        'tool': 'TXT Lookup',
+        'query': domain,
+        'status': 'error',
+        'records': [],
+        'authoritative': None,
+        'differences': [],
+        'command': f'dig {domain} TXT +short'
+    }
+
     try:
-        answers = dns.resolver.resolve(domain, 'TXT')
+        answers = resolver.resolve(domain, 'TXT')
         records = []
         for rdata in answers:
             txt_value = str(rdata).strip('"')
             records.append({'value': txt_value, 'ttl': answers.rrset.ttl})
-        return {
-            'tool': 'TXT Lookup',
-            'query': domain,
-            'status': 'success',
-            'records': records,
-            'count': len(records),
-            'command': f'dig {domain} TXT +short'
-        }
+        result['records'] = records
+        result['count'] = len(records)
+        result['status'] = 'success'
+
+        # Query authoritative NS
+        auth_ns = get_authoritative_nameservers(domain)
+        if auth_ns:
+            result['authoritative'] = {'nameservers': auth_ns, 'records': []}
+            for ns in auth_ns[:2]:
+                auth_records = query_authoritative(domain, 'TXT', ns['ip'])
+                if isinstance(auth_records, list) and auth_records:
+                    result['authoritative']['records'] = auth_records
+                    result['authoritative']['queried_ns'] = ns['name']
+                    break
+
+            # Compare (normalize TXT values)
+            if result['authoritative']['records']:
+                public_txt = set(r['value'].replace('"', '') for r in records)
+                auth_txt = set(r['value'].replace('"', '') for r in result['authoritative']['records'])
+                if public_txt != auth_txt:
+                    result['differences'] = []
+                    only_public = public_txt - auth_txt
+                    only_auth = auth_txt - public_txt
+                    if only_public:
+                        result['differences'].append({'type': 'public_only', 'message': 'In public DNS only', 'records': list(only_public)})
+                    if only_auth:
+                        result['differences'].append({'type': 'auth_only', 'message': 'In authoritative NS only', 'records': list(only_auth)})
+                    result['status'] = 'warning'
+
+        return result
     except dns.resolver.NXDOMAIN:
-        return {'tool': 'TXT Lookup', 'query': domain, 'status': 'error', 'message': 'Domain not found'}
+        result['message'] = 'Domain not found'
+        return result
     except dns.resolver.NoAnswer:
-        return {'tool': 'TXT Lookup', 'query': domain, 'status': 'warning', 'message': 'No TXT records found'}
+        result['status'] = 'warning'
+        result['message'] = 'No TXT records found'
+        return result
     except Exception as e:
-        return {'tool': 'TXT Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+        result['message'] = str(e)
+        return result
 
 
 def tool_spf_lookup(domain, depth=0, checked_domains=None):
     """Look up SPF record for a domain with include resolution."""
+    resolver = create_resolver(use_cache=False)
+
     if checked_domains is None:
         checked_domains = set()
 
@@ -825,7 +1034,7 @@ def tool_spf_lookup(domain, depth=0, checked_domains=None):
     checked_domains.add(domain)
 
     try:
-        answers = dns.resolver.resolve(domain, 'TXT')
+        answers = resolver.resolve(domain, 'TXT')
         spf_records = []
         for rdata in answers:
             txt_value = str(rdata).strip('"')
@@ -911,12 +1120,14 @@ def parse_spf_record(spf):
 def tool_dkim_lookup(query):
     """Look up DKIM record for a domain. Query format: selector:domain or just domain.
     When no selector specified, checks ALL common selectors and returns all found."""
+    resolver = create_resolver(use_cache=False)
+
     if ':' in query:
         selector, domain = query.split(':', 1)
         # Single selector lookup
         dkim_domain = f'{selector}._domainkey.{domain}'
         try:
-            answers = dns.resolver.resolve(dkim_domain, 'TXT')
+            answers = resolver.resolve(dkim_domain, 'TXT')
             records = []
             for rdata in answers:
                 txt_value = str(rdata).strip('"')
@@ -961,7 +1172,7 @@ def tool_dkim_lookup(query):
         dkim_domain = f'{selector}._domainkey.{domain}'
         selectors_checked.append({'selector': selector, 'domain': dkim_domain, 'found': False})
         try:
-            answers = dns.resolver.resolve(dkim_domain, 'TXT')
+            answers = resolver.resolve(dkim_domain, 'TXT')
             for rdata in answers:
                 txt_value = str(rdata).strip('"')
                 if 'v=DKIM1' in txt_value or 'k=' in txt_value or 'p=' in txt_value:
@@ -1015,28 +1226,57 @@ def parse_dkim_record(dkim_txt):
 
 
 def tool_dmarc_lookup(domain):
-    """Look up DMARC record for a domain."""
+    """Look up DMARC record for a domain with authoritative comparison."""
+    resolver = create_resolver(use_cache=False)
     dmarc_domain = f'_dmarc.{domain}'
+    result = {
+        'tool': 'DMARC Lookup',
+        'query': domain,
+        'status': 'warning',
+        'records': [],
+        'authoritative': None,
+        'differences': [],
+        'command': f'dig _dmarc.{domain} TXT +short'
+    }
+
     try:
-        answers = dns.resolver.resolve(dmarc_domain, 'TXT')
+        answers = resolver.resolve(dmarc_domain, 'TXT')
         for rdata in answers:
             txt_value = str(rdata).strip('"')
             if txt_value.startswith('v=DMARC1'):
                 parsed = parse_dmarc_record(txt_value)
-                return {
-                    'tool': 'DMARC Lookup',
-                    'query': domain,
-                    'status': 'success',
-                    'records': [{'value': txt_value, 'ttl': answers.rrset.ttl, 'parsed': parsed}],
-                    'command': f'dig _dmarc.{domain} TXT +short'
-                }
-        return {'tool': 'DMARC Lookup', 'query': domain, 'status': 'warning', 'message': 'No DMARC record found'}
+                result['records'] = [{'value': txt_value, 'ttl': answers.rrset.ttl, 'parsed': parsed}]
+                result['status'] = 'success'
+
+                # Query authoritative NS
+                auth_ns = get_authoritative_nameservers(domain)
+                if auth_ns:
+                    result['authoritative'] = {'nameservers': auth_ns, 'records': []}
+                    for ns in auth_ns[:2]:
+                        auth_records = query_authoritative(dmarc_domain, 'TXT', ns['ip'])
+                        if isinstance(auth_records, list) and auth_records:
+                            result['authoritative']['records'] = auth_records
+                            result['authoritative']['queried_ns'] = ns['name']
+                            # Check for differences
+                            auth_dmarc = [r['value'].replace('"', '') for r in auth_records if 'DMARC1' in r.get('value', '')]
+                            if auth_dmarc and txt_value not in auth_dmarc:
+                                result['differences'] = [{'type': 'mismatch', 'message': 'DMARC record differs', 'public': txt_value, 'authoritative': auth_dmarc[0]}]
+                                result['status'] = 'warning'
+                            break
+                return result
+
+        result['message'] = 'No DMARC record found'
+        return result
     except dns.resolver.NXDOMAIN:
-        return {'tool': 'DMARC Lookup', 'query': domain, 'status': 'warning', 'message': 'No DMARC record found'}
+        result['message'] = 'No DMARC record found'
+        return result
     except dns.resolver.NoAnswer:
-        return {'tool': 'DMARC Lookup', 'query': domain, 'status': 'warning', 'message': 'No DMARC record found'}
+        result['message'] = 'No DMARC record found'
+        return result
     except Exception as e:
-        return {'tool': 'DMARC Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+        result['status'] = 'error'
+        result['message'] = str(e)
+        return result
 
 
 def parse_dmarc_record(dmarc):
@@ -1074,6 +1314,8 @@ def tool_ptr_lookup(ip):
 
 def tool_blacklist_check(ip):
     """Check if an IP is on common blacklists."""
+    resolver = create_resolver(use_cache=False)
+
     # Common DNS blacklists
     blacklists = [
         'zen.spamhaus.org',
@@ -1100,7 +1342,7 @@ def tool_blacklist_check(ip):
     for bl in blacklists:
         lookup = f'{reversed_ip}.{bl}'
         try:
-            dns.resolver.resolve(lookup, 'A')
+            resolver.resolve(lookup, 'A')
             results.append({'blacklist': bl, 'listed': True})
             listed_count += 1
         except dns.resolver.NXDOMAIN:
@@ -1122,9 +1364,20 @@ def tool_blacklist_check(ip):
 
 def tool_ns_lookup(domain):
     """Look up NS records for a domain."""
+    resolver = create_resolver(use_cache=False)
     try:
-        answers = dns.resolver.resolve(domain, 'NS')
-        records = [{'nameserver': str(rdata).rstrip('.'), 'ttl': answers.rrset.ttl} for rdata in answers]
+        answers = resolver.resolve(domain, 'NS')
+        records = []
+        for rdata in answers:
+            ns_name = str(rdata).rstrip('.')
+            record = {'nameserver': ns_name, 'ttl': answers.rrset.ttl, 'ips': []}
+            # Resolve NS IPs
+            try:
+                a_answers = resolver.resolve(ns_name, 'A')
+                record['ips'] = [str(a) for a in a_answers]
+            except:
+                pass
+            records.append(record)
         return {
             'tool': 'NS Lookup',
             'query': domain,
@@ -1143,8 +1396,9 @@ def tool_ns_lookup(domain):
 
 def tool_soa_lookup(domain):
     """Look up SOA record for a domain."""
+    resolver = create_resolver(use_cache=False)
     try:
-        answers = dns.resolver.resolve(domain, 'SOA')
+        answers = resolver.resolve(domain, 'SOA')
         for rdata in answers:
             return {
                 'tool': 'SOA Lookup',
@@ -1172,8 +1426,9 @@ def tool_soa_lookup(domain):
 
 def tool_cname_lookup(domain):
     """Look up CNAME record for a domain."""
+    resolver = create_resolver(use_cache=False)
     try:
-        answers = dns.resolver.resolve(domain, 'CNAME')
+        answers = resolver.resolve(domain, 'CNAME')
         records = [{'target': str(rdata.target).rstrip('.'), 'ttl': answers.rrset.ttl} for rdata in answers]
         return {
             'tool': 'CNAME Lookup',
@@ -1192,24 +1447,61 @@ def tool_cname_lookup(domain):
 
 
 def tool_aaaa_lookup(domain):
-    """Look up AAAA (IPv6) records for a domain."""
+    """Look up AAAA (IPv6) records for a domain with authoritative comparison."""
+    resolver = create_resolver(use_cache=False)
+    result = {
+        'tool': 'AAAA (IPv6) Lookup',
+        'query': domain,
+        'status': 'error',
+        'records': [],
+        'authoritative': None,
+        'differences': [],
+        'command': f'dig {domain} AAAA +short'
+    }
+
     try:
-        answers = dns.resolver.resolve(domain, 'AAAA')
+        answers = resolver.resolve(domain, 'AAAA')
         records = [{'ip': str(rdata), 'ttl': answers.rrset.ttl} for rdata in answers]
-        return {
-            'tool': 'AAAA (IPv6) Lookup',
-            'query': domain,
-            'status': 'success',
-            'records': records,
-            'count': len(records),
-            'command': f'dig {domain} AAAA +short'
-        }
+        result['records'] = records
+        result['count'] = len(records)
+        result['status'] = 'success'
+
+        # Query authoritative NS
+        auth_ns = get_authoritative_nameservers(domain)
+        if auth_ns:
+            result['authoritative'] = {'nameservers': auth_ns, 'records': []}
+            for ns in auth_ns[:2]:
+                auth_records = query_authoritative(domain, 'AAAA', ns['ip'])
+                if isinstance(auth_records, list) and auth_records:
+                    result['authoritative']['records'] = auth_records
+                    result['authoritative']['queried_ns'] = ns['name']
+                    break
+
+            # Compare
+            if result['authoritative']['records']:
+                public_ips = set(r['ip'] for r in records)
+                auth_ips = set(r['value'] for r in result['authoritative']['records'])
+                if public_ips != auth_ips:
+                    result['differences'] = []
+                    only_public = public_ips - auth_ips
+                    only_auth = auth_ips - public_ips
+                    if only_public:
+                        result['differences'].append({'type': 'public_only', 'message': 'In public DNS only', 'records': list(only_public)})
+                    if only_auth:
+                        result['differences'].append({'type': 'auth_only', 'message': 'In authoritative NS only', 'records': list(only_auth)})
+                    result['status'] = 'warning'
+
+        return result
     except dns.resolver.NXDOMAIN:
-        return {'tool': 'AAAA (IPv6) Lookup', 'query': domain, 'status': 'error', 'message': 'Domain not found'}
+        result['message'] = 'Domain not found'
+        return result
     except dns.resolver.NoAnswer:
-        return {'tool': 'AAAA (IPv6) Lookup', 'query': domain, 'status': 'warning', 'message': 'No AAAA records found'}
+        result['status'] = 'warning'
+        result['message'] = 'No AAAA records found'
+        return result
     except Exception as e:
-        return {'tool': 'AAAA (IPv6) Lookup', 'query': domain, 'status': 'error', 'message': str(e)}
+        result['message'] = str(e)
+        return result
 
 
 def check_smtp_connectivity(host, port=25, timeout=10):
