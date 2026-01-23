@@ -35,8 +35,8 @@ MXLab is a comprehensive, self-hosted alternative to mail-tester.com for analyzi
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/mxlab.git
-cd mxlab
+git clone https://github.com/igrbtn/mxlab_pub.git
+cd mxlab_pub
 ```
 
 2. Create environment file:
