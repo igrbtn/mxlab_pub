@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, render_template, jsonify, request
 from aiosmtpd.controller import Controller
 from aiosmtpd.smtp import SMTP as SMTPServer
+from pymongo import MongoClient
 
 # Try to import optional analysis libraries
 try:
@@ -145,11 +146,25 @@ DOMAIN = os.environ.get('DOMAIN', 'localhost')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 
+# MongoDB configuration
+MONGO_URI = os.environ.get('MONGO_URI', 'mongodb://localhost:27017/')
+try:
+    mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    mongo_client.server_info()  # Test connection
+    db = mongo_client.mxlab
+    reports_collection = db.reports
+    MONGO_AVAILABLE = True
+    print(f"[MONGO] Connected to MongoDB at {MONGO_URI}")
+except Exception as e:
+    MONGO_AVAILABLE = False
+    reports_collection = None
+    print(f"[MONGO] MongoDB not available: {e}")
+
 
 async def send_telegram_notification(test_id, email_data, analysis):
     """Send silent notification to Telegram about received email."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return  # Telegram not configured, skip notification
+        return  # Telegram not configured
     try:
         score = analysis.get('score', 0)
         sender = email_data.get('from', 'Unknown')
@@ -180,7 +195,7 @@ async def send_telegram_notification(test_id, email_data, analysis):
 <b>Sender IP:</b> <code>{sender_ip}</code>{f' (port {sender_port})' if sender_port else ''}
 <b>Test ID:</b> <code>{test_id}</code>
 
-🔗 <a href="https://{DOMAIN}/#/results/{test_id}">View Results</a>"""
+🔗 <a href="https://{DOMAIN}/report/{test_id}">View Report</a>"""
 
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
@@ -201,10 +216,10 @@ async def send_telegram_notification(test_id, email_data, analysis):
         print(f"[TELEGRAM] Error sending notification: {e}")
 
 
-async def send_telegram_report_notification(domain, summary, client_ip):
+async def send_telegram_report_notification(domain, summary, client_ip, report_id=None):
     """Send silent notification to Telegram about MXlab Lookup."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return  # Telegram not configured, skip notification
+        return  # Telegram not configured
     try:
         score = summary.get('score', 0)
         passed = summary.get('passed', 0)
@@ -234,6 +249,9 @@ async def send_telegram_report_notification(domain, summary, client_ip):
 <b>Score:</b> {score}/100 — {status}
 <b>Results:</b> ✅ {passed} | ⚠️ {warnings} | ❌ {errors}
 <b>Client IP:</b> <code>{client_ip}</code>"""
+
+        if report_id:
+            message += f"\n\n🔗 <a href=\"https://{DOMAIN}/report/{report_id}\">View Report</a>"
 
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
@@ -427,6 +445,23 @@ class MailHandler:
             'analysis': analysis,
             'timestamp': datetime.now().isoformat()
         }
+
+        # Persist to MongoDB
+        if MONGO_AVAILABLE and reports_collection is not None:
+            try:
+                reports_collection.update_one(
+                    {'_id': test_id},
+                    {'$set': {
+                        'email': email_data,
+                        'analysis': analysis,
+                        'timestamp': datetime.now(),
+                        'type': 'email_test'
+                    }},
+                    upsert=True
+                )
+                print(f"[MONGO] Saved report for test_id: {test_id}")
+            except Exception as e:
+                print(f"[MONGO] Error saving report: {e}")
 
         print(f"[SMTP] Received email for test_id: {test_id}")
 
@@ -769,6 +804,31 @@ def get_results(test_id):
     if test_id in emails_store:
         return jsonify(emails_store[test_id])
     return jsonify({'error': 'Not found'}), 404
+
+
+@app.route('/report/<test_id>')
+def view_report(test_id):
+    """View standalone report page for a test."""
+    report = None
+
+    # Try in-memory store first
+    if test_id in emails_store:
+        report = emails_store[test_id]
+    # Fall back to MongoDB
+    elif MONGO_AVAILABLE and reports_collection is not None:
+        try:
+            report = reports_collection.find_one({'_id': test_id})
+            if report:
+                # Convert MongoDB datetime to string for template
+                if isinstance(report.get('timestamp'), datetime):
+                    report['timestamp'] = report['timestamp'].isoformat()
+        except Exception as e:
+            print(f"[MONGO] Error fetching report: {e}")
+
+    if not report:
+        return render_template('report.html', report=None, test_id=test_id, error="Report not found"), 404
+
+    return render_template('report.html', report=report, test_id=test_id, error=None)
 
 
 # MXlab Tools API endpoints
@@ -2204,6 +2264,21 @@ def full_domain_report():
         warning_penalty = report['summary']['warnings'] * 5
         report['summary']['score'] = max(0, round(base_score - warning_penalty))
 
+    # Persist domain lookup report to MongoDB
+    report_id = None
+    if MONGO_AVAILABLE and reports_collection is not None:
+        try:
+            report_id = f"lookup_{domain}_{int(datetime.now().timestamp())}"
+            report_copy = report.copy()
+            report_copy['_id'] = report_id
+            report_copy['type'] = 'domain_lookup'
+            reports_collection.insert_one(report_copy)
+            report['report_id'] = report_id
+            report['report_url'] = f"/report/{report_id}"
+            print(f"[MONGO] Saved domain lookup report: {report_id}")
+        except Exception as e:
+            print(f"[MONGO] Error saving domain lookup report: {e}")
+
     # Send Telegram notification (async, non-blocking)
     client_ip = request.headers.get('X-Forwarded-For', request.headers.get('X-Real-IP', request.remote_addr))
     if client_ip and ',' in client_ip:
@@ -2213,7 +2288,7 @@ def full_domain_report():
     def send_notification():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(send_telegram_report_notification(domain, report['summary'], client_ip))
+        loop.run_until_complete(send_telegram_report_notification(domain, report['summary'], client_ip, report_id))
         loop.close()
 
     threading.Thread(target=send_notification, daemon=True).start()

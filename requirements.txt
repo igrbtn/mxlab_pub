@@ -3,3 +3,4 @@ aiosmtpd>=1.4
 dnspython>=2.0
 dkimpy>=1.0
 aiohttp>=3.8
+pymongo>=4.0

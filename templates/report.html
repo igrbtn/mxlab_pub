@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MXLab Report - {{ test_id }}</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            min-height: 100vh;
+            color: #e2e8f0;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .logo {
+            width: 60px;
+            height: 60px;
+            margin-bottom: 16px;
+        }
+
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #f8fafc;
+            margin-bottom: 8px;
+        }
+
+        .test-id {
+            font-family: 'SF Mono', Monaco, monospace;
+            color: #64748b;
+            font-size: 0.9rem;
+        }
+
+        .card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            border: 1px solid #334155;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #f8fafc;
+        }
+
+        /* Score Display */
+        .score-card {
+            text-align: center;
+            padding: 32px;
+        }
+
+        .score-circle {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+
+        .score-excellent { background: linear-gradient(135deg, #10b981, #059669); color: white; }
+        .score-good { background: linear-gradient(135deg, #22c55e, #16a34a); color: white; }
+        .score-fair { background: linear-gradient(135deg, #eab308, #ca8a04); color: #1e293b; }
+        .score-poor { background: linear-gradient(135deg, #f97316, #ea580c); color: white; }
+        .score-critical { background: linear-gradient(135deg, #ef4444, #dc2626); color: white; }
+
+        .score-label {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .score-sublabel {
+            color: #94a3b8;
+            font-size: 0.9rem;
+        }
+
+        /* Email Info */
+        .info-grid {
+            display: grid;
+            gap: 12px;
+        }
+
+        .info-row {
+            display: flex;
+            gap: 12px;
+            padding: 12px;
+            background: #0f172a;
+            border-radius: 8px;
+        }
+
+        .info-label {
+            color: #64748b;
+            font-size: 0.85rem;
+            min-width: 80px;
+        }
+
+        .info-value {
+            color: #e2e8f0;
+            font-size: 0.9rem;
+            word-break: break-all;
+        }
+
+        /* Checks */
+        .check-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 14px;
+            background: #0f172a;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .check-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 12px;
+        }
+
+        .check-pass { background: #10b981; color: white; }
+        .check-warning { background: #eab308; color: #1e293b; }
+        .check-fail { background: #ef4444; color: white; }
+
+        .check-content {
+            flex: 1;
+        }
+
+        .check-name {
+            font-weight: 500;
+            color: #f8fafc;
+            margin-bottom: 4px;
+        }
+
+        .check-message {
+            font-size: 0.85rem;
+            color: #94a3b8;
+        }
+
+        .check-record {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.75rem;
+            color: #64748b;
+            margin-top: 8px;
+            padding: 8px;
+            background: #1e293b;
+            border-radius: 4px;
+            word-break: break-all;
+        }
+
+        /* Headers Section */
+        .headers-toggle {
+            background: #334155;
+            border: none;
+            color: #e2e8f0;
+            padding: 10px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            width: 100%;
+            text-align: left;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .headers-toggle:hover {
+            background: #475569;
+        }
+
+        .headers-content {
+            display: none;
+            margin-top: 12px;
+            padding: 16px;
+            background: #0f172a;
+            border-radius: 8px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.75rem;
+            color: #94a3b8;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .headers-content.open {
+            display: block;
+        }
+
+        /* Error state */
+        .error-card {
+            text-align: center;
+            padding: 60px 20px;
+        }
+
+        .error-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .error-message {
+            font-size: 1.2rem;
+            color: #94a3b8;
+        }
+
+        /* Back link */
+        .back-link {
+            display: inline-block;
+            color: #3b82f6;
+            text-decoration: none;
+            margin-top: 24px;
+            font-size: 0.9rem;
+        }
+
+        .back-link:hover {
+            text-decoration: underline;
+        }
+
+        /* Timestamp */
+        .timestamp {
+            text-align: center;
+            color: #64748b;
+            font-size: 0.8rem;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <svg class="logo" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="50" cy="50" r="45" fill="#1e293b" stroke="#3b82f6" stroke-width="3"/>
+                <path d="M30 35 L50 25 L70 35 L70 65 L50 75 L30 65 Z" fill="#3b82f6" opacity="0.3"/>
+                <path d="M50 25 L50 75" stroke="#3b82f6" stroke-width="2"/>
+                <path d="M30 35 L70 65" stroke="#3b82f6" stroke-width="2"/>
+                <path d="M70 35 L30 65" stroke="#3b82f6" stroke-width="2"/>
+                <text x="50" y="55" text-anchor="middle" fill="#f8fafc" font-size="16" font-weight="bold">MX</text>
+            </svg>
+            <h1>MXLab Report</h1>
+            <div class="test-id">{{ test_id }}</div>
+        </header>
+
+        {% if error %}
+        <div class="card error-card">
+            <div class="error-icon">🔍</div>
+            <div class="error-message">{{ error }}</div>
+            <a href="/" class="back-link">← Back to MXLab</a>
+        </div>
+        {% else %}
+
+        {% if report.type == 'email_test' or report.email %}
+        <!-- Email Test Report -->
+        {% set score = report.analysis.score if report.analysis else 0 %}
+        {% set score_class = 'excellent' if score >= 9 else 'good' if score >= 7 else 'fair' if score >= 5 else 'poor' if score >= 3 else 'critical' %}
+
+        <div class="card score-card">
+            <div class="score-circle score-{{ score_class }}">
+                {{ "%.1f"|format(score) }}
+            </div>
+            <div class="score-label">
+                {% if score >= 9 %}Excellent{% elif score >= 7 %}Good{% elif score >= 5 %}Fair{% elif score >= 3 %}Poor{% else %}Critical{% endif %}
+            </div>
+            <div class="score-sublabel">Email Deliverability Score</div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Email Details</span>
+            </div>
+            <div class="info-grid">
+                <div class="info-row">
+                    <span class="info-label">From</span>
+                    <span class="info-value">{{ report.email.from if report.email else 'N/A' }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">To</span>
+                    <span class="info-value">{{ report.email.to|join(', ') if report.email and report.email.to else 'N/A' }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Subject</span>
+                    <span class="info-value">{{ report.email.subject if report.email else 'N/A' }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Date</span>
+                    <span class="info-value">{{ report.email.date if report.email else 'N/A' }}</span>
+                </div>
+                {% if report.email and report.email.peer %}
+                <div class="info-row">
+                    <span class="info-label">Sender IP</span>
+                    <span class="info-value">{{ report.email.peer[0] if report.email.peer else 'N/A' }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Analysis Checks</span>
+            </div>
+            {% if report.analysis and report.analysis.checks %}
+            {% for check in report.analysis.checks %}
+            <div class="check-item">
+                <div class="check-icon check-{{ check.status }}">
+                    {% if check.status == 'pass' %}✓{% elif check.status == 'warning' %}!{% else %}✗{% endif %}
+                </div>
+                <div class="check-content">
+                    <div class="check-name">{{ check.name }}</div>
+                    <div class="check-message">{{ check.message }}</div>
+                    {% if check.record %}
+                    <div class="check-record">{{ check.record }}</div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="check-message">No analysis data available</div>
+            {% endif %}
+        </div>
+
+        {% if report.email and report.email.headers %}
+        <div class="card">
+            <button class="headers-toggle" onclick="toggleHeaders()">
+                <span>Raw Headers</span>
+                <span id="headers-arrow">▼</span>
+            </button>
+            <div class="headers-content" id="headers-content">{% for key, value in report.email.headers.items() %}{{ key }}: {{ value }}
+{% endfor %}</div>
+        </div>
+        {% endif %}
+
+        {% elif report.type == 'domain_lookup' or report.checks %}
+        <!-- Domain Lookup Report -->
+        {% set score = report.summary.score if report.summary else 0 %}
+        {% set score_class = 'excellent' if score >= 90 else 'good' if score >= 75 else 'fair' if score >= 60 else 'poor' if score >= 40 else 'critical' %}
+
+        <div class="card score-card">
+            <div class="score-circle score-{{ score_class }}">
+                {{ score }}
+            </div>
+            <div class="score-label">
+                {% if score >= 90 %}Excellent{% elif score >= 75 %}Good{% elif score >= 60 %}Fair{% elif score >= 40 %}Poor{% else %}Critical{% endif %}
+            </div>
+            <div class="score-sublabel">Domain Configuration Score</div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Domain: {{ report.domain }}</span>
+            </div>
+            <div class="info-grid">
+                <div class="info-row">
+                    <span class="info-label">Passed</span>
+                    <span class="info-value" style="color: #10b981;">{{ report.summary.passed if report.summary else 0 }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Warnings</span>
+                    <span class="info-value" style="color: #eab308;">{{ report.summary.warnings if report.summary else 0 }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Errors</span>
+                    <span class="info-value" style="color: #ef4444;">{{ report.summary.errors if report.summary else 0 }}</span>
+                </div>
+            </div>
+        </div>
+
+        {% if report.checks %}
+        {% for check_name, check_data in report.checks.items() %}
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">{{ check_data.tool if check_data.tool else check_name|upper }}</span>
+                <div class="check-icon check-{{ check_data.status }}">
+                    {% if check_data.status == 'success' %}✓{% elif check_data.status == 'warning' %}!{% else %}✗{% endif %}
+                </div>
+            </div>
+            {% if check_data.message %}
+            <div class="check-message" style="margin-bottom: 12px;">{{ check_data.message }}</div>
+            {% endif %}
+            {% if check_data.records %}
+            <div class="info-grid">
+                {% for record in check_data.records[:5] %}
+                <div class="info-row">
+                    <span class="info-value" style="font-family: monospace; font-size: 0.8rem;">
+                        {% if record.host %}{{ record.priority }} {{ record.host }}{% endif %}
+                        {% if record.ip %}{{ record.ip }}{% endif %}
+                        {% if record.value %}{{ record.value[:100] }}{% if record.value|length > 100 %}...{% endif %}{% endif %}
+                        {% if record.nameserver %}{{ record.nameserver }}{% endif %}
+                        {% if record.hostname %}{{ record.hostname }}{% endif %}
+                        {% if record.blacklist %}{{ record.blacklist }}: {% if record.listed %}LISTED{% else %}Clean{% endif %}{% endif %}
+                    </span>
+                </div>
+                {% endfor %}
+                {% if check_data.records|length > 5 %}
+                <div class="check-message">... and {{ check_data.records|length - 5 }} more</div>
+                {% endif %}
+            </div>
+            {% endif %}
+            {% if check_data.rfc %}
+            <div class="check-record" style="margin-top: 12px;">
+                <strong>{{ check_data.rfc.rfc }}</strong>: {{ check_data.rfc.tip }}
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+        {% endif %}
+
+        {% endif %}
+
+        <div class="timestamp">
+            Report generated: {{ report.timestamp if report.timestamp else 'N/A' }}
+        </div>
+
+        <div style="text-align: center;">
+            <a href="/" class="back-link">← Back to MXLab</a>
+        </div>
+
+        {% endif %}
+    </div>
+
+    <script>
+        function toggleHeaders() {
+            const content = document.getElementById('headers-content');
+            const arrow = document.getElementById('headers-arrow');
+            if (content.classList.contains('open')) {
+                content.classList.remove('open');
+                arrow.textContent = '▼';
+            } else {
+                content.classList.add('open');
+                arrow.textContent = '▲';
+            }
+        }
+    </script>
+</body>
+</html>
