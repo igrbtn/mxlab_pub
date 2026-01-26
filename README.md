@@ -26,8 +26,84 @@ MXLab is a comprehensive, self-hosted alternative to mail-tester.com for analyzi
 ### Additional Features
 - Real-time streaming results (Server-Sent Events)
 - Progressive loading UI
+- Persistent reports with shareable URLs
 - Optional Telegram notifications
 - Docker deployment ready
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              DOCKER COMPOSE                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────────────────────────────────┐    ┌─────────────────────────┐ │
+│  │            MXLab Container              │    │   MongoDB Container     │ │
+│  │                                         │    │                         │ │
+│  │  ┌─────────────────────────────────┐   │    │  ┌───────────────────┐  │ │
+│  │  │         Flask Web Server        │   │    │  │    reports DB     │  │ │
+│  │  │            (port 5000)          │   │    │  │                   │  │ │
+│  │  │                                 │   │    │  │  - email_test     │  │ │
+│  │  │  /              → Web UI        │   │    │  │  - domain_lookup  │  │ │
+│  │  │  /report/<id>   → Report Page   │◄─────────►│                   │  │ │
+│  │  │  /api/*         → REST API      │   │    │  └───────────────────┘  │ │
+│  │  └─────────────────────────────────┘   │    │                         │ │
+│  │                                         │    │     mongodb:27017       │ │
+│  │  ┌─────────────────────────────────┐   │    └─────────────────────────┘ │
+│  │  │       aiosmtpd SMTP Server      │   │                                │
+│  │  │            (port 25)            │   │    ┌─────────────────────────┐ │
+│  │  │                                 │   │    │   Telegram API          │ │
+│  │  │  Receives test emails           │   │    │   (optional)            │ │
+│  │  │  Triggers analysis              │───────►│                         │ │
+│  │  │  Stores results                 │   │    │  Notifications on:      │ │
+│  │  └─────────────────────────────────┘   │    │  - Email received       │ │
+│  │                                         │    │  - Domain report done   │ │
+│  └─────────────────────────────────────────┘    └─────────────────────────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │                    │
+         │ :8080              │ :25
+         ▼                    ▼
+┌─────────────────┐  ┌─────────────────────────────────────────────────────────┐
+│   Web Browser   │  │                    External Mail Servers                │
+│                 │  │                                                         │
+│  - Generate     │  │  Sender MTA ──► SMTP ──► MXLab ──► Analysis ──► Report │
+│    test email   │  │                                                         │
+│  - View reports │  └─────────────────────────────────────────────────────────┘
+│  - DNS lookups  │
+└─────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            DATA FLOW                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  MXtest (Email Analysis):                                                   │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌───────┐ │
+│  │ Generate │───►│  Send    │───►│ Receive  │───►│ Analyze  │───►│ Store │ │
+│  │ Address  │    │  Email   │    │  SMTP    │    │  Email   │    │ Report│ │
+│  └──────────┘    └──────────┘    └──────────┘    └──────────┘    └───────┘ │
+│                                                        │              │     │
+│                                                        ▼              ▼     │
+│                                                   ┌─────────┐   ┌────────┐ │
+│                                                   │Telegram │   │MongoDB │ │
+│                                                   │  Notify │   │        │ │
+│                                                   └─────────┘   └────────┘ │
+│                                                                             │
+│  MXlab Lookup (DNS Analysis):                                               │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐             │
+│  │  Enter   │───►│  Query   │───►│ Stream   │───►│  Store   │             │
+│  │  Domain  │    │  DNS     │    │ Results  │    │  Report  │             │
+│  └──────────┘    └──────────┘    └──────────┘    └──────────┘             │
+│                       │                               │                     │
+│                       ▼                               ▼                     │
+│              ┌─────────────────┐              ┌─────────────┐              │
+│              │ MX, SPF, DKIM,  │              │ /report/<id>│              │
+│              │ DMARC, SMTP,    │              │ Permanent   │              │
+│              │ Blacklist, etc. │              │ URL         │              │
+│              └─────────────────┘              └─────────────┘              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Quick Start
 
@@ -84,6 +160,7 @@ python app.py
 | `DOMAIN` | `localhost` | Your server's domain name |
 | `SMTP_PORT` | `25` | SMTP server port |
 | `WEB_PORT` | `5000` | Web interface port |
+| `MONGO_URI` | `mongodb://mongodb:27017/` | MongoDB connection string |
 | `TELEGRAM_BOT_TOKEN` | *(empty)* | Optional: Telegram bot token for notifications |
 | `TELEGRAM_CHAT_ID` | *(empty)* | Optional: Telegram chat ID for notifications |
 
@@ -178,7 +255,8 @@ TELEGRAM_CHAT_ID=your_chat_id
 |----------|--------|-------------|
 | `/api/generate` | POST | Generate test email address |
 | `/api/check/<test_id>` | GET | Check if email received |
-| `/api/results/<test_id>` | GET | Get full analysis results |
+| `/api/results/<test_id>` | GET | Get full analysis results (JSON) |
+| `/report/<test_id>` | GET | View report page (HTML) |
 | `/api/tools/<tool>?query=<domain>` | GET | Run individual DNS tool |
 | `/api/tools/report?query=<domain>` | GET | Full domain report (JSON) |
 | `/api/tools/report/stream?query=<domain>` | GET | Streaming domain report (SSE) |
@@ -189,10 +267,11 @@ TELEGRAM_CHAT_ID=your_chat_id
 ## Tech Stack
 
 - **Backend**: Python, Flask, aiosmtpd
+- **Database**: MongoDB (persistent reports)
 - **DNS**: dnspython
 - **DKIM**: dkimpy
 - **Frontend**: Vanilla JavaScript, CSS
-- **Deployment**: Docker
+- **Deployment**: Docker Compose
 
 ## License
 
