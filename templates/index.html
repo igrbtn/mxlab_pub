@@ -1317,7 +1317,9 @@
             'Date Header': { description: `The <strong>Date header</strong> indicates when the message was composed.` },
             'Message-ID Header': { description: `The <strong>Message-ID header</strong> is a unique identifier for the email.` },
             'Spam Content Check': { description: `Analyzes email content for common <strong>spam trigger words</strong>.` },
-            'HTML/Plain Text': { description: `Best practice is to send emails with both <strong>HTML and plain text</strong> versions.` }
+            'HTML/Plain Text': { description: `Best practice is to send emails with both <strong>HTML and plain text</strong> versions.` },
+            'Internal IP Leak': { description: `<strong>Internal IP addresses</strong> in email headers can reveal your internal network structure. Private IPs (10.x.x.x, 172.16-31.x.x, 192.168.x.x) should not be exposed in outbound email headers.` },
+            'Server Version Check': { description: `<strong>Mail server version information</strong> in headers can reveal outdated or vulnerable software. Keeping mail servers updated is important for security.` }
         };
 
         function getStatusCharacter(score) {
@@ -1698,6 +1700,22 @@
                     technicalInfo = `<div class="check-technical"><div class="check-technical-title">Record</div><div class="check-code">${escapeHtml(check.record)}</div></div>`;
                 }
 
+                // Display details for Internal IP Leak and Server Version checks
+                let detailsHtml = '';
+                if (check.details) {
+                    if (check.name === 'Internal IP Leak' && check.details.ips && check.details.ips.length > 0) {
+                        detailsHtml = `<div class="check-technical"><div class="check-technical-title">Detected Internal IPs</div><div class="check-code">${check.details.ips.map(ip => escapeHtml(ip)).join('\n')}</div></div>`;
+                        if (check.details.headers && check.details.headers.length > 0) {
+                            detailsHtml += `<div class="check-technical"><div class="check-technical-title">Found in Headers</div><div class="check-code">${check.details.headers.map(h => escapeHtml(h)).join('\n')}</div></div>`;
+                        }
+                    } else if (check.name === 'Server Version Check' && check.details.detected && check.details.detected.length > 0) {
+                        detailsHtml = `<div class="check-technical"><div class="check-technical-title">Detected Software</div><div class="check-code">${check.details.detected.map(d => escapeHtml(d)).join('\n')}</div></div>`;
+                        if (check.details.issues && check.details.issues.length > 0) {
+                            detailsHtml += `<div class="check-technical"><div class="check-technical-title">Version Issues</div><div class="check-code" style="color:#f59e0b;">${check.details.issues.map(i => escapeHtml(i)).join('\n')}</div></div>`;
+                        }
+                    }
+                }
+
                 let commandHtml = '';
                 if (command) {
                     commandHtml = `<div class="check-command"><code>${escapeHtml(command)}</code><button class="copy-cmd" onclick="event.stopPropagation(); copyCommand(this, '${escapeHtml(command)}')">Copy</button></div>`;
@@ -1720,7 +1738,7 @@
                         </div>
                         <div class="check-body">
                             <div class="check-description">${details.description || 'No additional information available.'}</div>
-                            ${infoGrid}${technicalInfo}${commandHtml}
+                            ${infoGrid}${technicalInfo}${detailsHtml}${commandHtml}
                         </div>
                     </div>
                 `;
