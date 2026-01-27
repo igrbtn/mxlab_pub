@@ -562,6 +562,20 @@ async def analyze_email(envelope, msg, session):
         analysis['score'] -= 0.5
         analysis['warnings'].append(html_check['message'])
 
+    # 8. Check for internal IP leaks in headers
+    ip_leak_check = check_internal_ips(msg)
+    analysis['checks'].append(ip_leak_check)
+    if ip_leak_check['status'] == 'warning':
+        analysis['score'] -= ip_leak_check.get('deduction', 0.5)
+        analysis['warnings'].append('Internal IP addresses exposed in headers')
+
+    # 9. Check for obsolete server versions
+    version_check = check_server_versions(msg)
+    analysis['checks'].append(version_check)
+    if version_check['status'] == 'warning':
+        analysis['score'] -= version_check.get('deduction', 0.5)
+        analysis['warnings'].append('Outdated mail software detected')
+
     # Ensure score doesn't go below 0
     analysis['score'] = max(0, analysis['score'])
 
@@ -767,6 +781,193 @@ def check_html_content(msg):
             'status': 'pass',
             'message': 'Plain text email'
         }
+
+
+def check_internal_ips(msg):
+    """Check for internal/private IP addresses leaked in headers."""
+    import re
+
+    # Private IP ranges (RFC 1918 + link-local + loopback)
+    private_ip_patterns = [
+        r'10\.\d{1,3}\.\d{1,3}\.\d{1,3}',           # 10.0.0.0/8
+        r'172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}',  # 172.16.0.0/12
+        r'192\.168\.\d{1,3}\.\d{1,3}',               # 192.168.0.0/16
+        r'127\.\d{1,3}\.\d{1,3}\.\d{1,3}',           # 127.0.0.0/8 (loopback)
+        r'169\.254\.\d{1,3}\.\d{1,3}',               # 169.254.0.0/16 (link-local)
+    ]
+    combined_pattern = '|'.join(f'({p})' for p in private_ip_patterns)
+
+    found_ips = []
+    headers_with_ips = []
+
+    # Check Received headers (most common place for IP leaks)
+    received_headers = msg.get_all('Received', [])
+    for i, header in enumerate(received_headers):
+        matches = re.findall(combined_pattern, str(header))
+        for match in matches:
+            ip = [m for m in match if m][0]  # Get the matched group
+            if ip not in found_ips:
+                found_ips.append(ip)
+                headers_with_ips.append(f'Received[{i}]')
+
+    # Check X-Originating-IP
+    orig_ip = msg.get('X-Originating-IP', '')
+    matches = re.findall(combined_pattern, str(orig_ip))
+    if matches:
+        for match in matches:
+            ip = [m for m in match if m][0]
+            if ip not in found_ips:
+                found_ips.append(ip)
+                headers_with_ips.append('X-Originating-IP')
+
+    # Check X-Sender-IP
+    sender_ip = msg.get('X-Sender-IP', '')
+    matches = re.findall(combined_pattern, str(sender_ip))
+    if matches:
+        for match in matches:
+            ip = [m for m in match if m][0]
+            if ip not in found_ips:
+                found_ips.append(ip)
+                headers_with_ips.append('X-Sender-IP')
+
+    if found_ips:
+        return {
+            'name': 'Internal IP Leak',
+            'status': 'warning',
+            'message': f'Internal IPs exposed: {", ".join(found_ips[:3])}',
+            'details': {
+                'ips': found_ips,
+                'headers': headers_with_ips
+            },
+            'deduction': 0.5
+        }
+
+    return {
+        'name': 'Internal IP Leak',
+        'status': 'pass',
+        'message': 'No internal IP addresses exposed in headers'
+    }
+
+
+def check_server_versions(msg):
+    """Check for obsolete or vulnerable mail server versions in headers."""
+    import re
+
+    issues = []
+    info = []
+
+    # Known obsolete/vulnerable software patterns
+    obsolete_patterns = {
+        # Microsoft Exchange versions
+        r'Microsoft-Server-ActiveSync/(\d+\.\d+)': ('Exchange ActiveSync', '15.0', 'Exchange 2010 or older'),
+        r'Microsoft Exchange Server (\d+)': ('Exchange', '2016', 'Exchange 2013 or older'),
+        r'Microsoft SMTP Server.*?(\d+\.\d+\.\d+)': ('MS SMTP', '15.0.0', 'Old Microsoft SMTP'),
+
+        # Postfix
+        r'Postfix.*?(\d+\.\d+\.\d+)': ('Postfix', '3.5.0', 'Postfix < 3.5'),
+
+        # Sendmail
+        r'Sendmail.*?(\d+\.\d+\.\d+)': ('Sendmail', '8.16.0', 'Sendmail < 8.16'),
+
+        # Exim
+        r'Exim (\d+\.\d+)': ('Exim', '4.94', 'Exim < 4.94'),
+
+        # Microsoft Outlook
+        r'Microsoft Outlook (\d+\.\d+)': ('Outlook', '16.0', 'Outlook 2013 or older'),
+        r'Microsoft Office Outlook (\d+\.\d+)': ('Outlook', '16.0', 'Outlook 2013 or older'),
+
+        # Old webmail
+        r'Roundcube Webmail/(\d+\.\d+)': ('Roundcube', '1.5', 'Roundcube < 1.5'),
+    }
+
+    # Headers to check for version info
+    headers_to_check = [
+        'Received',
+        'X-Mailer',
+        'X-MimeOLE',
+        'User-Agent',
+        'X-Originating-Server',
+        'X-MS-Exchange-Organization',
+        'X-Mailer-Version',
+    ]
+
+    # Collect all header values
+    all_header_content = []
+    for header_name in headers_to_check:
+        values = msg.get_all(header_name, [])
+        for v in values:
+            all_header_content.append((header_name, str(v)))
+
+    # Also check single-value headers
+    for header_name in ['X-Mailer', 'X-MimeOLE', 'User-Agent']:
+        val = msg.get(header_name)
+        if val:
+            all_header_content.append((header_name, str(val)))
+
+    # Check for obsolete versions
+    for header_name, content in all_header_content:
+        for pattern, (software, min_version, warning_msg) in obsolete_patterns.items():
+            match = re.search(pattern, content, re.IGNORECASE)
+            if match:
+                found_version = match.group(1)
+                info.append(f'{software} {found_version}')
+                # Simple version comparison (works for most cases)
+                try:
+                    found_parts = [int(x) for x in found_version.split('.')[:2]]
+                    min_parts = [int(x) for x in min_version.split('.')[:2]]
+                    if found_parts < min_parts:
+                        issues.append({
+                            'software': software,
+                            'version': found_version,
+                            'header': header_name,
+                            'issue': warning_msg
+                        })
+                except:
+                    pass
+
+    # Check for X-Mailer presence (detect client)
+    x_mailer = msg.get('X-Mailer', '')
+    if x_mailer and x_mailer not in [i for i in info]:
+        info.append(f'X-Mailer: {x_mailer[:50]}')
+
+    # Check for generic old Microsoft indicators
+    x_mimeole = msg.get('X-MimeOLE', '')
+    if x_mimeole:
+        if 'Microsoft MimeOLE' in x_mimeole:
+            # Very old Outlook Express / Windows Mail
+            issues.append({
+                'software': 'MimeOLE',
+                'version': x_mimeole,
+                'header': 'X-MimeOLE',
+                'issue': 'Very old email client (Outlook Express era)'
+            })
+
+    if issues:
+        issue_msgs = [f"{i['software']}: {i['issue']}" for i in issues[:2]]
+        return {
+            'name': 'Server Version Check',
+            'status': 'warning',
+            'message': f'Outdated software: {"; ".join(issue_msgs)}',
+            'details': {
+                'issues': issues,
+                'detected': info
+            },
+            'deduction': 0.5
+        }
+
+    if info:
+        return {
+            'name': 'Server Version Check',
+            'status': 'pass',
+            'message': f'Mail software: {", ".join(info[:2])}',
+            'details': {'detected': info}
+        }
+
+    return {
+        'name': 'Server Version Check',
+        'status': 'pass',
+        'message': 'No version information detected in headers'
+    }
 
 
 # Flask Routes
