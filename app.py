@@ -2670,22 +2670,44 @@ def stream_domain_report():
         checks_completed += 1
         yield send_event('check', {'name': 'blacklist', 'result': result, 'progress': checks_completed})
 
-        # Calculate summary
+        # Calculate summary with weighted scoring
+        # Weights: critical checks have higher impact, optional checks have lower
+        check_weights = {
+            'mx': 1.0,          # Essential for email
+            'spf': 1.0,         # Important authentication
+            'dkim': 1.0,        # Important authentication
+            'dmarc': 1.0,       # Important authentication
+            'blacklist': 1.0,   # Critical security
+            'a': 0.8,           # Basic DNS
+            'ns': 0.8,          # Basic DNS
+            'smtp': 0.8,        # Email connectivity
+            'ssl': 0.8,         # Security
+            'txt': 0.5,         # Informational
+            'autodiscover': 0.4, # Optional (Exchange)
+            'aaaa': 0.2,        # IPv6 is optional
+        }
+
         summary = {'total': 0, 'passed': 0, 'warnings': 0, 'errors': 0, 'score': 0}
+        weighted_passed = 0
+        total_weight = 0
+
         for check_name, check_data in all_checks.items():
             summary['total'] += 1
+            weight = check_weights.get(check_name, 0.5)
+            total_weight += weight
             status = check_data.get('status', 'error')
             if status == 'success':
                 summary['passed'] += 1
+                weighted_passed += weight
             elif status == 'warning':
                 summary['warnings'] += 1
+                weighted_passed += weight * 0.5  # Warnings get half credit
             else:
                 summary['errors'] += 1
 
-        if summary['total'] > 0:
-            base_score = (summary['passed'] / summary['total']) * 100
-            warning_penalty = summary['warnings'] * 5
-            summary['score'] = max(0, round(base_score - warning_penalty))
+        if total_weight > 0:
+            base_score = (weighted_passed / total_weight) * 100
+            summary['score'] = max(0, round(base_score))
 
         # Save to MongoDB
         report_id = None
@@ -2809,22 +2831,44 @@ def full_domain_report():
                 'message': 'Could not resolve MX server IP for blacklist check'
             }
 
-    # Calculate summary
+    # Calculate summary with weighted scoring
+    # Weights: critical checks have higher impact, optional checks have lower
+    check_weights = {
+        'mx': 1.0,          # Essential for email
+        'spf': 1.0,         # Important authentication
+        'dkim': 1.0,        # Important authentication
+        'dmarc': 1.0,       # Important authentication
+        'blacklist': 1.0,   # Critical security
+        'a': 0.8,           # Basic DNS
+        'ns': 0.8,          # Basic DNS
+        'smtp': 0.8,        # Email connectivity
+        'ssl': 0.8,         # Security
+        'txt': 0.5,         # Informational
+        'autodiscover': 0.4, # Optional (Exchange)
+        'aaaa': 0.2,        # IPv6 is optional
+    }
+
+    weighted_passed = 0
+    total_weight = 0
+
     for check_name, check_data in report['checks'].items():
         report['summary']['total'] += 1
+        weight = check_weights.get(check_name, 0.5)
+        total_weight += weight
         status = check_data.get('status', 'error')
         if status == 'success':
             report['summary']['passed'] += 1
+            weighted_passed += weight
         elif status == 'warning':
             report['summary']['warnings'] += 1
+            weighted_passed += weight * 0.5  # Warnings get half credit
         else:
             report['summary']['errors'] += 1
 
-    # Calculate score (0-100)
-    if report['summary']['total'] > 0:
-        base_score = (report['summary']['passed'] / report['summary']['total']) * 100
-        warning_penalty = report['summary']['warnings'] * 5
-        report['summary']['score'] = max(0, round(base_score - warning_penalty))
+    # Calculate score (0-100) using weighted scoring
+    if total_weight > 0:
+        base_score = (weighted_passed / total_weight) * 100
+        report['summary']['score'] = max(0, round(base_score))
 
     # Persist domain lookup report to MongoDB
     report_id = None
