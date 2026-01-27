@@ -1719,6 +1719,11 @@ def tool_ssl_comprehensive_check(domain, mx_records=None, autodiscover_result=No
             result['summary']['valid'] += 1
         elif check_result['status'] == 'warning':
             result['summary']['warnings'] += 1
+        elif check_result['status'] == 'info':
+            # Service not available - not an error
+            if 'unavailable' not in result['summary']:
+                result['summary']['unavailable'] = 0
+            result['summary']['unavailable'] += 1
         else:
             result['summary']['errors'] += 1
 
@@ -1729,9 +1734,12 @@ def tool_ssl_comprehensive_check(domain, mx_records=None, autodiscover_result=No
     elif result['summary']['warnings'] > 0:
         result['status'] = 'warning'
         result['message'] = f"{result['summary']['warnings']} certificate warning(s)"
-    else:
+    elif result['summary']['valid'] > 0:
         result['status'] = 'success'
-        result['message'] = f"All {result['summary']['valid']} certificates valid"
+        result['message'] = f"{result['summary']['valid']} certificate(s) valid"
+    else:
+        result['status'] = 'info'
+        result['message'] = 'No SSL services available'
 
     return result
 
@@ -1992,7 +2000,8 @@ def check_ssl_certificate(host, port=443, timeout=10):
     try:
         socket.gethostbyname(host)
     except socket.gaierror as e:
-        cert_info['error'] = f'DNS resolution failed: {host}'
+        cert_info['error'] = f'Host not found: {host}'
+        cert_info['status'] = 'info'  # Not an error - subdomain may not exist
         return cert_info
 
     try:
@@ -2093,12 +2102,18 @@ def check_ssl_certificate(host, port=443, timeout=10):
 
     except socket.timeout:
         cert_info['error'] = 'Connection timeout'
+        cert_info['status'] = 'warning'
     except ConnectionRefusedError:
-        cert_info['error'] = 'Connection refused - port 443 not open'
+        cert_info['error'] = 'Port not open'
+        cert_info['status'] = 'info'  # Not an error - service just not available
     except ssl.SSLError as e:
         cert_info['error'] = f'SSL error: {str(e)}'
     except OSError as e:
-        cert_info['error'] = f'Connection error: {str(e)}'
+        if 'No route to host' in str(e) or 'Network is unreachable' in str(e):
+            cert_info['error'] = 'Host unreachable'
+            cert_info['status'] = 'info'
+        else:
+            cert_info['error'] = f'Connection error: {str(e)}'
     except Exception as e:
         cert_info['error'] = f'Error: {str(e)}'
 
