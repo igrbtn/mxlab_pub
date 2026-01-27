@@ -2543,6 +2543,9 @@ def stream_domain_report():
     from flask import Response
 
     domain = request.args.get('query', '').strip()
+    client_ip = request.headers.get('X-Forwarded-For', request.headers.get('X-Real-IP', request.remote_addr))
+    if client_ip and ',' in client_ip:
+        client_ip = client_ip.split(',')[0].strip()
 
     if not domain:
         return jsonify({'error': 'Domain parameter is required'}), 400
@@ -2554,6 +2557,7 @@ def stream_domain_report():
         """Generator function for SSE stream."""
         checks_completed = 0
         total_checks = 12  # Total number of checks (added SSL)
+        all_checks = {}  # Collect all check results for saving
 
         # Helper to send SSE event
         def send_event(event_type, data):
@@ -2565,29 +2569,34 @@ def stream_domain_report():
         # 1. MX Lookup (store for later use)
         mx_result = tool_mx_lookup(domain)
         mx_result['rfc'] = RFC_TIPS['mx']
+        all_checks['mx'] = mx_result
         checks_completed += 1
         yield send_event('check', {'name': 'mx', 'result': mx_result, 'progress': checks_completed})
 
         # 2. A Record
         result = tool_a_lookup(domain)
         result['rfc'] = RFC_TIPS['a']
+        all_checks['a'] = result
         checks_completed += 1
         yield send_event('check', {'name': 'a', 'result': result, 'progress': checks_completed})
 
         # 3. AAAA Record
         result = tool_aaaa_lookup(domain)
         result['rfc'] = RFC_TIPS['aaaa']
+        all_checks['aaaa'] = result
         checks_completed += 1
         yield send_event('check', {'name': 'aaaa', 'result': result, 'progress': checks_completed})
 
         # 4. NS Record
         result = tool_ns_lookup(domain)
         result['rfc'] = RFC_TIPS['ns']
+        all_checks['ns'] = result
         checks_completed += 1
         yield send_event('check', {'name': 'ns', 'result': result, 'progress': checks_completed})
 
         # 5. TXT Record
         result = tool_txt_lookup(domain)
+        all_checks['txt'] = result
         checks_completed += 1
         yield send_event('check', {'name': 'txt', 'result': result, 'progress': checks_completed})
 
@@ -2597,28 +2606,33 @@ def stream_domain_report():
             result['rfc'] = RFC_TIPS['spf']
         else:
             result = {'tool': 'SPF Lookup', 'status': 'warning', 'message': 'No SPF record found', 'rfc': RFC_TIPS['spf']}
+        all_checks['spf'] = result
         checks_completed += 1
         yield send_event('check', {'name': 'spf', 'result': result, 'progress': checks_completed})
 
         # 7. DKIM
         result = tool_dkim_lookup(domain)
         result['rfc'] = RFC_TIPS['dkim']
+        all_checks['dkim'] = result
         checks_completed += 1
         yield send_event('check', {'name': 'dkim', 'result': result, 'progress': checks_completed})
 
         # 8. DMARC
         result = tool_dmarc_lookup(domain)
         result['rfc'] = RFC_TIPS['dmarc']
+        all_checks['dmarc'] = result
         checks_completed += 1
         yield send_event('check', {'name': 'dmarc', 'result': result, 'progress': checks_completed})
 
         # 9. SMTP (slower)
         result = tool_smtp_check(domain)
+        all_checks['smtp'] = result
         checks_completed += 1
         yield send_event('check', {'name': 'smtp', 'result': result, 'progress': checks_completed})
 
         # 10. Autodiscover (store for SSL check)
         autodiscover_result = tool_autodiscover_check(domain)
+        all_checks['autodiscover'] = autodiscover_result
         checks_completed += 1
         yield send_event('check', {'name': 'autodiscover', 'result': autodiscover_result, 'progress': checks_completed})
 
@@ -2626,11 +2640,11 @@ def stream_domain_report():
         # Checks: main domain, autodiscover subdomain, mail servers (SMTPS)
         mx_records = mx_result.get('records', []) if mx_result else []
         result = tool_ssl_comprehensive_check(domain, mx_records, autodiscover_result)
+        all_checks['ssl'] = result
         checks_completed += 1
         yield send_event('check', {'name': 'ssl', 'result': result, 'progress': checks_completed})
 
         # 12. Blacklist (need MX IP first)
-        mx_result = tool_mx_lookup(domain)
         if mx_result.get('records'):
             mx_host = mx_result['records'][0]['host']
             try:
@@ -2652,11 +2666,60 @@ def stream_domain_report():
                 'status': 'warning',
                 'message': 'No MX records to check'
             }
+        all_checks['blacklist'] = result
         checks_completed += 1
         yield send_event('check', {'name': 'blacklist', 'result': result, 'progress': checks_completed})
 
-        # Send completion event
-        yield send_event('complete', {'domain': domain, 'total_checks': total_checks})
+        # Calculate summary
+        summary = {'total': 0, 'passed': 0, 'warnings': 0, 'errors': 0, 'score': 0}
+        for check_name, check_data in all_checks.items():
+            summary['total'] += 1
+            status = check_data.get('status', 'error')
+            if status == 'success':
+                summary['passed'] += 1
+            elif status == 'warning':
+                summary['warnings'] += 1
+            else:
+                summary['errors'] += 1
+
+        if summary['total'] > 0:
+            base_score = (summary['passed'] / summary['total']) * 100
+            warning_penalty = summary['warnings'] * 5
+            summary['score'] = max(0, round(base_score - warning_penalty))
+
+        # Save to MongoDB
+        report_id = None
+        if MONGO_AVAILABLE and reports_collection is not None:
+            try:
+                report_id = f"lookup_{domain}_{int(datetime.now().timestamp())}"
+                report_doc = {
+                    '_id': report_id,
+                    'type': 'domain_lookup',
+                    'domain': domain,
+                    'timestamp': datetime.now().isoformat(),
+                    'checks': all_checks,
+                    'summary': summary
+                }
+                reports_collection.insert_one(report_doc)
+                print(f"[MONGO] Saved streaming lookup report: {report_id}")
+            except Exception as e:
+                print(f"[MONGO] Error saving streaming lookup report: {e}")
+
+        # Send Telegram notification (async in thread)
+        import threading
+        def send_notification():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(send_telegram_report_notification(domain, summary, client_ip, report_id))
+            loop.close()
+        threading.Thread(target=send_notification, daemon=True).start()
+
+        # Send completion event with report_id
+        complete_data = {'domain': domain, 'total_checks': total_checks, 'summary': summary}
+        if report_id:
+            complete_data['report_id'] = report_id
+            complete_data['report_url'] = f"/report/{report_id}"
+        yield send_event('complete', complete_data)
 
     return Response(
         generate(),
