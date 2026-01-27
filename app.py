@@ -142,7 +142,7 @@ SMTP_PORT = int(os.environ.get('SMTP_PORT', 25))
 WEB_PORT = int(os.environ.get('WEB_PORT', 5000))
 DOMAIN = os.environ.get('DOMAIN', 'localhost')
 
-# Telegram notification configuration (optional)
+# Telegram notification configuration (optional - set via environment variables)
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 
@@ -164,7 +164,7 @@ except Exception as e:
 async def send_telegram_notification(test_id, email_data, analysis):
     """Send silent notification to Telegram about received email."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return  # Telegram not configured
+        return  # Telegram notifications disabled
     try:
         score = analysis.get('score', 0)
         sender = email_data.get('from', 'Unknown')
@@ -224,7 +224,7 @@ async def send_telegram_notification(test_id, email_data, analysis):
 async def send_telegram_report_notification(domain, summary, client_ip, report_id=None):
     """Send silent notification to Telegram about MXlab Lookup."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return  # Telegram not configured
+        return  # Telegram notifications disabled
     try:
         score = summary.get('score', 0)
         passed = summary.get('passed', 0)
@@ -336,8 +336,14 @@ RFC_TIPS = {
     'smtp': {
         'rfc': 'RFC 5321',
         'title': 'SMTP Protocol',
-        'tip': 'SMTP servers should respond to EHLO/HELO commands and support standard ports (25, 587, 465).',
-        'fix': 'Ensure your mail server is accessible on port 25, responds to EHLO, and has valid SSL/TLS on port 465/587.'
+        'tip': 'SMTP servers should respond to EHLO/HELO commands, support standard ports (25, 587, 465), and NOT be open relays.',
+        'fix': 'Ensure your mail server is accessible on port 25, responds to EHLO, has valid SSL/TLS on port 465/587, and rejects relay attempts from unauthorized senders.'
+    },
+    'open_relay': {
+        'rfc': 'RFC 5321 Section 7.1',
+        'title': 'Open Mail Relay',
+        'tip': 'An open relay allows anyone to send email through your server, which will be abused by spammers and get your IP blacklisted.',
+        'fix': 'Configure your mail server to require authentication or only accept mail for local domains. Check Postfix: smtpd_relay_restrictions, Sendmail: relay-domains, Exchange: receive connectors.'
     },
     'starttls': {
         'rfc': 'RFC 3207',
@@ -862,6 +868,7 @@ def run_tool(tool):
         'soa': tool_soa_lookup,
         'cname': tool_cname_lookup,
         'aaaa': tool_aaaa_lookup,
+        'ssl': tool_ssl_check,
     }
 
     handler = tool_handlers.get(tool)
@@ -1569,8 +1576,118 @@ def tool_aaaa_lookup(domain):
         return result
 
 
-def check_smtp_connectivity(host, port=25, timeout=10):
-    """Check SMTP connectivity with full connection transcript."""
+def tool_ssl_check(host):
+    """Check SSL certificate for a host. Query can be hostname or hostname:port."""
+    # Parse port from query if provided
+    port = 443
+    if ':' in host:
+        parts = host.rsplit(':', 1)
+        host = parts[0]
+        try:
+            port = int(parts[1])
+        except ValueError:
+            pass
+
+    cert_result = check_ssl_certificate(host, port)
+
+    result = {
+        'tool': 'SSL Certificate Check',
+        'query': f'{host}:{port}',
+        'status': cert_result.get('status', 'error'),
+        'records': [],
+        'command': f'openssl s_client -connect {host}:{port} -servername {host} </dev/null 2>/dev/null | openssl x509 -noout -dates -subject -issuer'
+    }
+
+    if cert_result.get('error'):
+        result['message'] = cert_result['error']
+        return result
+
+    if cert_result['valid']:
+        days = cert_result.get('days_remaining')
+        subject = cert_result.get('subject', 'Unknown')
+
+        # Build status message
+        if cert_result['expired']:
+            result['message'] = f'Certificate EXPIRED - {subject}'
+            result['status'] = 'error'
+        elif cert_result['trusted']:
+            if days is not None and days < 30:
+                result['message'] = f'Certificate valid but EXPIRES SOON ({days} days) - {subject}'
+                result['status'] = 'warning'
+            else:
+                result['message'] = f'Certificate valid and trusted - {days} days remaining'
+                result['status'] = 'success'
+        else:
+            result['message'] = f'Certificate valid but NOT TRUSTED'
+            result['status'] = 'warning'
+
+        # Build records for display
+        result['records'] = [{
+            'field': 'Subject',
+            'value': cert_result.get('subject')
+        }, {
+            'field': 'Issuer',
+            'value': cert_result.get('issuer')
+        }, {
+            'field': 'Valid From',
+            'value': cert_result.get('not_before')
+        }, {
+            'field': 'Valid Until',
+            'value': cert_result.get('not_after')
+        }, {
+            'field': 'Days Remaining',
+            'value': str(cert_result.get('days_remaining', 'N/A')),
+            'highlight': 'warning' if days is not None and days < 30 else ('error' if cert_result['expired'] else 'success')
+        }, {
+            'field': 'Trusted',
+            'value': 'Yes' if cert_result.get('trusted') else 'No',
+            'highlight': 'success' if cert_result.get('trusted') else 'warning'
+        }, {
+            'field': 'Serial Number',
+            'value': cert_result.get('serial')
+        }, {
+            'field': 'Version',
+            'value': cert_result.get('version')
+        }, {
+            'field': 'Signature Algorithm',
+            'value': cert_result.get('signature_algorithm')
+        }]
+
+        # Add SANs if present
+        sans = cert_result.get('san', [])
+        if sans:
+            result['records'].append({
+                'field': 'Subject Alt Names',
+                'value': ', '.join(sans[:10]) + (f' (+{len(sans)-10} more)' if len(sans) > 10 else '')
+            })
+
+        # Add trust error if not trusted
+        if not cert_result.get('trusted') and cert_result.get('trust_error'):
+            result['records'].append({
+                'field': 'Trust Error',
+                'value': cert_result.get('trust_error'),
+                'highlight': 'error'
+            })
+
+        result['certificate'] = {
+            'subject': cert_result.get('subject'),
+            'issuer': cert_result.get('issuer'),
+            'valid_from': cert_result.get('not_before'),
+            'valid_until': cert_result.get('not_after'),
+            'days_remaining': cert_result.get('days_remaining'),
+            'expired': cert_result.get('expired'),
+            'trusted': cert_result.get('trusted'),
+            'serial': cert_result.get('serial'),
+            'version': cert_result.get('version'),
+            'signature_algorithm': cert_result.get('signature_algorithm'),
+            'san': cert_result.get('san', [])
+        }
+
+    return result
+
+
+def check_smtp_connectivity(host, port=25, timeout=10, test_open_relay=True):
+    """Check SMTP connectivity with full connection transcript and open relay test."""
     result = {
         'host': host,
         'port': port,
@@ -1579,6 +1696,7 @@ def check_smtp_connectivity(host, port=25, timeout=10):
         'helo_supported': False,
         'ehlo_supported': False,
         'starttls': False,
+        'open_relay': None,  # None = not tested, True = vulnerable, False = secure
         'banner': None,
         'capabilities': [],
         'transcript': [],
@@ -1635,21 +1753,70 @@ def check_smtp_connectivity(host, port=25, timeout=10):
         else:
             log('info', 'EHLO not supported, trying HELO...')
 
-        # Also test HELO
-        helo_cmd = 'HELO mxlab.test\r\n'
-        log('send', helo_cmd.strip())
-        sock.send(helo_cmd.encode())
-        helo_response = sock.recv(1024).decode('utf-8', errors='replace').strip()
-        log('recv', helo_response)
+            # Try HELO if EHLO failed
+            helo_cmd = 'HELO mxlab.test\r\n'
+            log('send', helo_cmd.strip())
+            sock.send(helo_cmd.encode())
+            helo_response = sock.recv(1024).decode('utf-8', errors='replace').strip()
+            log('recv', helo_response)
 
-        if helo_response.startswith('250'):
-            result['helo_supported'] = True
-            if not result['ehlo_supported']:
+            if helo_response.startswith('250'):
+                result['helo_supported'] = True
                 result['status'] = 'warning'
                 result['message'] = 'Only HELO supported (EHLO failed)'
-        else:
-            if not result['ehlo_supported']:
+            else:
                 result['message'] = 'Neither EHLO nor HELO supported'
+                sock.close()
+                return result
+
+        # Open Relay Test (only on port 25 and if requested)
+        if test_open_relay and port == 25 and (result['ehlo_supported'] or result['helo_supported']):
+            log('info', '--- Open Relay Test ---')
+            result['open_relay'] = False  # Assume secure until proven otherwise
+
+            try:
+                # Try to send from external domain to another external domain
+                # Using well-known test domains that won't cause issues
+                mail_from_cmd = 'MAIL FROM:<openrelay-test@example.org>\r\n'
+                log('send', mail_from_cmd.strip())
+                sock.send(mail_from_cmd.encode())
+                mail_response = sock.recv(1024).decode('utf-8', errors='replace').strip()
+                log('recv', mail_response)
+
+                if mail_response.startswith('250'):
+                    # Server accepted MAIL FROM, now try RCPT TO external domain
+                    rcpt_to_cmd = 'RCPT TO:<openrelay-test@example.net>\r\n'
+                    log('send', rcpt_to_cmd.strip())
+                    sock.send(rcpt_to_cmd.encode())
+                    rcpt_response = sock.recv(1024).decode('utf-8', errors='replace').strip()
+                    log('recv', rcpt_response)
+
+                    if rcpt_response.startswith('250') or rcpt_response.startswith('251'):
+                        # Server accepted relay to external domain - OPEN RELAY!
+                        result['open_relay'] = True
+                        result['status'] = 'error'
+                        result['message'] = 'OPEN RELAY DETECTED - Server accepts mail relay to external domains'
+                        log('info', 'WARNING: Server is an OPEN RELAY!')
+                    elif rcpt_response.startswith('4') or rcpt_response.startswith('5'):
+                        # Server rejected relay - this is correct behavior
+                        log('info', 'Server correctly rejected relay attempt')
+
+                    # Reset the transaction
+                    rset_cmd = 'RSET\r\n'
+                    log('send', rset_cmd.strip())
+                    sock.send(rset_cmd.encode())
+                    try:
+                        rset_response = sock.recv(1024).decode('utf-8', errors='replace').strip()
+                        log('recv', rset_response)
+                    except:
+                        pass
+                else:
+                    log('info', 'MAIL FROM rejected (normal for some configurations)')
+
+            except socket.timeout:
+                log('info', 'Open relay test timed out')
+            except Exception as e:
+                log('info', f'Open relay test error: {str(e)}')
 
         # Send QUIT
         quit_cmd = 'QUIT\r\n'
@@ -1750,7 +1917,7 @@ def tool_smtp_check(domain):
     }
 
 
-def check_ssl_certificate(host, port=443, timeout=5):
+def check_ssl_certificate(host, port=443, timeout=10):
     """Check SSL certificate for a host, allowing untrusted certs."""
     cert_info = {
         'host': host,
@@ -1765,8 +1932,18 @@ def check_ssl_certificate(host, port=443, timeout=5):
         'expired': None,
         'days_remaining': None,
         'san': [],
+        'serial': None,
+        'version': None,
+        'signature_algorithm': None,
         'error': None
     }
+
+    # First check if host resolves
+    try:
+        socket.gethostbyname(host)
+    except socket.gaierror as e:
+        cert_info['error'] = f'DNS resolution failed: {host}'
+        return cert_info
 
     try:
         # Create SSL context that doesn't verify (to get cert even if untrusted)
@@ -1776,76 +1953,100 @@ def check_ssl_certificate(host, port=443, timeout=5):
 
         with socket.create_connection((host, port), timeout=timeout) as sock:
             with context.wrap_socket(sock, server_hostname=host) as ssock:
-                cert = ssock.getpeercert(binary_form=True)
+                # Get certificate in DER (binary) format - this works even with CERT_NONE
+                cert_der = ssock.getpeercert(binary_form=True)
 
-                # Parse the certificate
-                import ssl as ssl_module
-                cert_dict = ssl_module._ssl._test_decode_cert(cert) if hasattr(ssl_module._ssl, '_test_decode_cert') else {}
+                if not cert_der:
+                    cert_info['error'] = 'No certificate received'
+                    return cert_info
 
-                # Get certificate details using openssl-like parsing
+                # Try to use cryptography library for detailed parsing
                 try:
-                    # Use cryptography library if available, otherwise basic info
-                    from datetime import datetime
-                    cert_pem = ssl.DER_cert_to_PEM_cert(cert)
+                    from cryptography import x509
+                    from cryptography.hazmat.backends import default_backend
 
-                    # Try to get basic info from peercert
-                    context_verify = ssl.create_default_context()
+                    cert = x509.load_der_x509_certificate(cert_der, default_backend())
+
+                    # Extract subject
                     try:
-                        with socket.create_connection((host, port), timeout=timeout) as sock2:
-                            with context_verify.wrap_socket(sock2, server_hostname=host) as ssock2:
-                                cert_verified = ssock2.getpeercert()
-                                cert_info['trusted'] = True
-                    except ssl.SSLCertVerificationError as e:
-                        cert_info['trusted'] = False
-                        cert_info['trust_error'] = str(e)
+                        cn = cert.subject.get_attributes_for_oid(x509.oid.NameOID.COMMON_NAME)
+                        cert_info['subject'] = cn[0].value if cn else None
                     except:
-                        cert_info['trusted'] = False
+                        cert_info['subject'] = str(cert.subject)
 
-                    # Get cert info by connecting again with no verify
-                    with socket.create_connection((host, port), timeout=timeout) as sock3:
-                        with context.wrap_socket(sock3, server_hostname=host) as ssock3:
-                            cert_dict = ssock3.getpeercert()
-                            if cert_dict:
-                                # Subject
-                                subject = dict(x[0] for x in cert_dict.get('subject', []))
-                                cert_info['subject'] = subject.get('commonName', '')
+                    # Extract issuer
+                    try:
+                        issuer_cn = cert.issuer.get_attributes_for_oid(x509.oid.NameOID.COMMON_NAME)
+                        issuer_org = cert.issuer.get_attributes_for_oid(x509.oid.NameOID.ORGANIZATION_NAME)
+                        cert_info['issuer'] = issuer_cn[0].value if issuer_cn else (issuer_org[0].value if issuer_org else str(cert.issuer))
+                    except:
+                        cert_info['issuer'] = str(cert.issuer)
 
-                                # Issuer
-                                issuer = dict(x[0] for x in cert_dict.get('issuer', []))
-                                cert_info['issuer'] = issuer.get('commonName', issuer.get('organizationName', ''))
+                    # Validity dates
+                    cert_info['not_before'] = cert.not_valid_before_utc.strftime('%Y-%m-%d %H:%M:%S UTC')
+                    cert_info['not_after'] = cert.not_valid_after_utc.strftime('%Y-%m-%d %H:%M:%S UTC')
 
-                                # Validity dates
-                                not_before = cert_dict.get('notBefore', '')
-                                not_after = cert_dict.get('notAfter', '')
-                                cert_info['not_before'] = not_before
-                                cert_info['not_after'] = not_after
+                    # Check expiry
+                    now = datetime.utcnow()
+                    cert_info['expired'] = cert.not_valid_after_utc.replace(tzinfo=None) < now
+                    cert_info['days_remaining'] = (cert.not_valid_after_utc.replace(tzinfo=None) - now).days
 
-                                # Parse dates and check expiry
-                                if not_after:
-                                    try:
-                                        # Format: 'Dec 31 23:59:59 2024 GMT'
-                                        expiry = datetime.strptime(not_after, '%b %d %H:%M:%S %Y %Z')
-                                        now = datetime.utcnow()
-                                        cert_info['expired'] = expiry < now
-                                        cert_info['days_remaining'] = (expiry - now).days
-                                    except:
-                                        pass
+                    # Serial number
+                    cert_info['serial'] = format(cert.serial_number, 'X')
 
-                                # SANs
-                                san = cert_dict.get('subjectAltName', [])
-                                cert_info['san'] = [x[1] for x in san if x[0] == 'DNS']
+                    # Version
+                    cert_info['version'] = cert.version.name
 
-                                cert_info['valid'] = True
-                                cert_info['status'] = 'success' if cert_info['trusted'] else 'warning'
-                except Exception as e:
-                    cert_info['error'] = str(e)
+                    # Signature algorithm
+                    cert_info['signature_algorithm'] = cert.signature_algorithm_oid._name
+
+                    # Subject Alternative Names
+                    try:
+                        san_ext = cert.extensions.get_extension_for_oid(x509.oid.ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+                        cert_info['san'] = [name.value for name in san_ext.value.get_values_for_type(x509.DNSName)]
+                    except x509.ExtensionNotFound:
+                        cert_info['san'] = []
+
+                    cert_info['valid'] = True
+
+                except ImportError:
+                    # Fallback: basic parsing without cryptography library
+                    cert_info['error'] = 'cryptography library not available for detailed parsing'
+                    cert_info['valid'] = True  # We got a cert, just can't parse details
+
+        # Now check if the certificate is trusted (separate connection with verification)
+        try:
+            context_verify = ssl.create_default_context()
+            with socket.create_connection((host, port), timeout=timeout) as sock2:
+                with context_verify.wrap_socket(sock2, server_hostname=host) as ssock2:
+                    # If we get here without exception, cert is trusted
+                    cert_info['trusted'] = True
+        except ssl.SSLCertVerificationError as e:
+            cert_info['trusted'] = False
+            cert_info['trust_error'] = str(e)
+        except Exception as e:
+            cert_info['trusted'] = False
+            cert_info['trust_error'] = f'Verification failed: {str(e)}'
+
+        # Set final status
+        if cert_info['valid']:
+            if cert_info['expired']:
+                cert_info['status'] = 'error'
+            elif cert_info['trusted']:
+                cert_info['status'] = 'success'
+            else:
+                cert_info['status'] = 'warning'
 
     except socket.timeout:
         cert_info['error'] = 'Connection timeout'
     except ConnectionRefusedError:
-        cert_info['error'] = 'Connection refused'
+        cert_info['error'] = 'Connection refused - port 443 not open'
+    except ssl.SSLError as e:
+        cert_info['error'] = f'SSL error: {str(e)}'
+    except OSError as e:
+        cert_info['error'] = f'Connection error: {str(e)}'
     except Exception as e:
-        cert_info['error'] = str(e)
+        cert_info['error'] = f'Error: {str(e)}'
 
     return cert_info
 
@@ -1944,20 +2145,29 @@ def tool_autodiscover_check(domain):
 
     for ssl_host in ssl_hosts:
         cert_result = check_ssl_certificate(ssl_host, 443)
-        cert_status = 'success' if cert_result['trusted'] else ('warning' if cert_result['valid'] else 'error')
 
+        # Build detailed message
         cert_message = ''
+        cert_status = cert_result.get('status', 'error')
+
         if cert_result['valid']:
-            if cert_result['trusted']:
-                cert_message = f"Valid & trusted - {cert_result['subject']}"
-            else:
-                cert_message = f"Valid but UNTRUSTED - {cert_result.get('trust_error', 'Certificate not trusted')}"
+            days = cert_result.get('days_remaining')
+            subject = cert_result.get('subject', 'Unknown')
+
             if cert_result['expired']:
-                cert_message = f"EXPIRED - {cert_result['subject']}"
+                cert_message = f"EXPIRED - {subject}"
                 cert_status = 'error'
-            elif cert_result['days_remaining'] is not None and cert_result['days_remaining'] < 30:
-                cert_message += f" (expires in {cert_result['days_remaining']} days)"
-                cert_status = 'warning'
+            elif cert_result['trusted']:
+                cert_message = f"{subject} - {days} days remaining"
+                if days is not None and days < 30:
+                    cert_message = f"{subject} - EXPIRES SOON ({days} days)"
+                    cert_status = 'warning'
+            else:
+                trust_err = cert_result.get('trust_error', 'Not trusted')
+                # Shorten long trust errors
+                if len(trust_err) > 80:
+                    trust_err = trust_err[:77] + '...'
+                cert_message = f"{subject} - UNTRUSTED: {trust_err}"
         else:
             cert_message = cert_result.get('error', 'Could not retrieve certificate')
 
@@ -1975,7 +2185,10 @@ def tool_autodiscover_check(domain):
                 'trusted': cert_result.get('trusted'),
                 'expired': cert_result.get('expired'),
                 'days_remaining': cert_result.get('days_remaining'),
-                'san': cert_result.get('san', [])
+                'san': cert_result.get('san', []),
+                'serial': cert_result.get('serial'),
+                'version': cert_result.get('version'),
+                'signature_algorithm': cert_result.get('signature_algorithm')
             }
         })
 
@@ -2070,7 +2283,7 @@ def stream_domain_report():
     def generate():
         """Generator function for SSE stream."""
         checks_completed = 0
-        total_checks = 11  # Total number of checks
+        total_checks = 12  # Total number of checks (added SSL)
 
         # Helper to send SSE event
         def send_event(event_type, data):
@@ -2129,17 +2342,22 @@ def stream_domain_report():
         checks_completed += 1
         yield send_event('check', {'name': 'dmarc', 'result': result, 'progress': checks_completed})
 
-        # 9. SMTP (slower)
+        # 9. SSL Certificate
+        result = tool_ssl_check(domain)
+        checks_completed += 1
+        yield send_event('check', {'name': 'ssl', 'result': result, 'progress': checks_completed})
+
+        # 10. SMTP (slower)
         result = tool_smtp_check(domain)
         checks_completed += 1
         yield send_event('check', {'name': 'smtp', 'result': result, 'progress': checks_completed})
 
-        # 10. Autodiscover (slower)
+        # 11. Autodiscover (slower)
         result = tool_autodiscover_check(domain)
         checks_completed += 1
         yield send_event('check', {'name': 'autodiscover', 'result': result, 'progress': checks_completed})
 
-        # 11. Blacklist (need MX IP first)
+        # 12. Blacklist (need MX IP first)
         mx_result = tool_mx_lookup(domain)
         if mx_result.get('records'):
             mx_host = mx_result['records'][0]['host']
@@ -2228,6 +2446,9 @@ def full_domain_report():
 
     report['checks']['dmarc'] = tool_dmarc_lookup(domain)
     report['checks']['dmarc']['rfc'] = RFC_TIPS['dmarc']
+
+    # SSL Certificate
+    report['checks']['ssl'] = tool_ssl_check(domain)
 
     # SMTP Connectivity
     report['checks']['smtp'] = tool_smtp_check(domain)

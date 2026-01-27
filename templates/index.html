@@ -1246,7 +1246,7 @@
                             Full Domain Report
                         </button>
                     </div>
-                    <p style="color:#64748b;font-size:0.85rem;margin-top:12px;text-align:center;">Checks: MX, A, AAAA, NS, SPF, DKIM, DMARC, SMTP Connectivity, Autodiscover, Blacklists</p>
+                    <p style="color:#64748b;font-size:0.85rem;margin-top:12px;text-align:center;">Checks: MX, A, AAAA, NS, SPF, DKIM, DMARC, SSL Certificate, SMTP, Autodiscover, Blacklists</p>
                 </div>
 
                 <div class="loading-tools" id="loadingTools">
@@ -1813,7 +1813,7 @@
                     report.checks[checkName] = result;
 
                     // Update progress
-                    document.getElementById('loadingText').textContent = `Running checks... (${data.progress}/11)`;
+                    document.getElementById('loadingText').textContent = `Running checks... (${data.progress}/12)`;
 
                     // Update summary counters
                     const status = result.status || 'error';
@@ -1946,7 +1946,7 @@
             const checksDiv = document.getElementById('reportChecks');
             checksDiv.innerHTML = '';
 
-            const checkOrder = ['mx', 'a', 'aaaa', 'ns', 'spf', 'dkim', 'dmarc', 'smtp', 'autodiscover', 'blacklist', 'txt'];
+            const checkOrder = ['mx', 'a', 'aaaa', 'ns', 'spf', 'dkim', 'dmarc', 'ssl', 'smtp', 'autodiscover', 'blacklist', 'txt'];
 
             for (const checkName of checkOrder) {
                 const check = report.checks[checkName];
@@ -2048,18 +2048,37 @@
                 html += `<div style="margin-bottom:12px;color:#94a3b8;">${check.mx_successful || 0} of ${check.mx_count || 0} MX servers responding</div>`;
 
                 check.results.forEach(mx => {
-                    html += `<div style="background:#0f172a;border-radius:8px;padding:16px;margin-bottom:12px;">
+                    // Check if any port has open relay
+                    const port25 = mx.ports && mx.ports['25'];
+                    const hasOpenRelay = port25 && port25.open_relay === true;
+
+                    html += `<div style="background:#0f172a;border-radius:8px;padding:16px;margin-bottom:12px;${hasOpenRelay ? 'border:2px solid #ef4444;' : ''}">
                         <div style="font-weight:600;color:#f8fafc;margin-bottom:8px;">${escapeHtml(mx.host)} <span style="color:#64748b;font-weight:400;">(Priority: ${mx.priority})</span></div>`;
                     if (mx.ips && mx.ips.length > 0) {
                         html += `<div style="color:#64748b;font-size:0.85rem;margin-bottom:12px;">IPs: ${mx.ips.join(', ')}</div>`;
                     }
 
+                    // Open Relay Warning Banner
+                    if (hasOpenRelay) {
+                        html += `<div style="background:rgba(239,68,68,0.15);border:1px solid #ef4444;border-radius:6px;padding:12px;margin-bottom:12px;display:flex;align-items:center;gap:10px;">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                            </svg>
+                            <div>
+                                <div style="color:#ef4444;font-weight:600;">OPEN RELAY DETECTED</div>
+                                <div style="color:#f87171;font-size:0.85rem;">This server accepts mail relay to external domains - critical security issue!</div>
+                            </div>
+                        </div>`;
+                    }
+
                     // Show each port test
                     html += '<div class="smtp-results" style="grid-template-columns: repeat(3, 1fr);">';
                     for (const [port, portResult] of Object.entries(mx.ports || {})) {
-                        const statusClass = portResult.status === 'success' ? 'success' : (portResult.status === 'warning' ? 'warning' : 'error');
+                        const isOpenRelay = portResult.open_relay === true;
+                        const statusClass = isOpenRelay ? 'error' : (portResult.status === 'success' ? 'success' : (portResult.status === 'warning' ? 'warning' : 'error'));
                         const statusColor = statusClass === 'success' ? '#22c55e' : (statusClass === 'warning' ? '#f59e0b' : '#ef4444');
-                        html += `<div class="smtp-result">
+                        html += `<div class="smtp-result" style="${isOpenRelay ? 'border:1px solid #ef4444;' : ''}">
                             <div class="smtp-result-header">
                                 <span class="smtp-result-port">${portResult.port_name || 'Port ' + port}</span>
                             </div>
@@ -2067,15 +2086,16 @@
                                 ${portResult.connection ? (portResult.ehlo_supported ? 'EHLO OK' : (portResult.helo_supported ? 'HELO Only' : 'Connected')) : 'Failed'}
                             </div>
                             ${portResult.starttls ? '<div style="color:#22c55e;font-size:0.75rem;">✓ STARTTLS</div>' : ''}
+                            ${port === '25' && portResult.open_relay === false ? '<div style="color:#22c55e;font-size:0.75rem;">✓ Relay Blocked</div>' : ''}
+                            ${port === '25' && portResult.open_relay === true ? '<div style="color:#ef4444;font-size:0.75rem;font-weight:600;">⚠ OPEN RELAY</div>' : ''}
                             ${portResult.capabilities && portResult.capabilities.length > 0 ? `<div style="color:#64748b;font-size:0.7rem;margin-top:4px;">${portResult.capabilities.slice(0,3).join(', ')}${portResult.capabilities.length > 3 ? '...' : ''}</div>` : ''}
                         </div>`;
                     }
                     html += '</div>';
 
                     // Show transcript for port 25 if available
-                    const port25 = mx.ports && mx.ports['25'];
                     if (port25 && port25.transcript && port25.transcript.length > 0) {
-                        html += `<details style="margin-top:12px;"><summary style="cursor:pointer;color:#3b82f6;font-size:0.85rem;">View Connection Log</summary>
+                        html += `<details style="margin-top:12px;"><summary style="cursor:pointer;color:#3b82f6;font-size:0.85rem;">View Connection Log (includes relay test)</summary>
                         <div style="background:#1e293b;border-radius:6px;padding:12px;margin-top:8px;font-family:monospace;font-size:0.75rem;">`;
                         port25.transcript.forEach(t => {
                             const color = t.direction === 'send' ? '#3b82f6' : (t.direction === 'recv' ? '#22c55e' : '#64748b');
@@ -2154,6 +2174,79 @@
                 check.records.forEach(r => {
                     html += `<div class="blacklist-item ${r.listed ? 'listed' : ''}"><div class="blacklist-status"></div><span class="blacklist-name">${escapeHtml(r.blacklist)}</span></div>`;
                 });
+                html += '</div></div>';
+            }
+            // SSL Certificate
+            else if (checkName === 'ssl' && check.certificate) {
+                const cert = check.certificate;
+                const daysColor = cert.expired ? '#ef4444' : (cert.days_remaining < 30 ? '#f59e0b' : '#22c55e');
+                const trustColor = cert.trusted ? '#22c55e' : '#f59e0b';
+
+                html += '<div class="check-data-section"><div class="check-data-title">SSL Certificate Details</div>';
+                html += '<div style="display:grid;gap:8px;">';
+
+                // Subject
+                html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;">
+                    <span style="color:#64748b;min-width:140px;">Subject</span>
+                    <span style="color:#e2e8f0;font-family:monospace;">${escapeHtml(cert.subject || 'N/A')}</span>
+                </div>`;
+
+                // Issuer
+                html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;">
+                    <span style="color:#64748b;min-width:140px;">Issuer</span>
+                    <span style="color:#e2e8f0;font-family:monospace;">${escapeHtml(cert.issuer || 'N/A')}</span>
+                </div>`;
+
+                // Valid From
+                html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;">
+                    <span style="color:#64748b;min-width:140px;">Valid From</span>
+                    <span style="color:#e2e8f0;font-family:monospace;">${escapeHtml(cert.valid_from || 'N/A')}</span>
+                </div>`;
+
+                // Valid Until
+                html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;">
+                    <span style="color:#64748b;min-width:140px;">Valid Until</span>
+                    <span style="color:#e2e8f0;font-family:monospace;">${escapeHtml(cert.valid_until || 'N/A')}</span>
+                </div>`;
+
+                // Days Remaining (highlighted)
+                html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;border-left:3px solid ${daysColor};">
+                    <span style="color:#64748b;min-width:140px;">Days Remaining</span>
+                    <span style="color:${daysColor};font-weight:600;font-size:1.1rem;">${cert.expired ? 'EXPIRED' : (cert.days_remaining !== null ? cert.days_remaining + ' days' : 'N/A')}</span>
+                </div>`;
+
+                // Trusted
+                html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;border-left:3px solid ${trustColor};">
+                    <span style="color:#64748b;min-width:140px;">Trusted</span>
+                    <span style="color:${trustColor};font-weight:500;">${cert.trusted ? '✓ Yes - Valid chain of trust' : '⚠ No - Certificate not trusted'}</span>
+                </div>`;
+
+                // Serial Number
+                if (cert.serial) {
+                    html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;">
+                        <span style="color:#64748b;min-width:140px;">Serial Number</span>
+                        <span style="color:#94a3b8;font-family:monospace;font-size:0.85rem;">${escapeHtml(cert.serial)}</span>
+                    </div>`;
+                }
+
+                // Signature Algorithm
+                if (cert.signature_algorithm) {
+                    html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;">
+                        <span style="color:#64748b;min-width:140px;">Signature</span>
+                        <span style="color:#94a3b8;font-family:monospace;">${escapeHtml(cert.signature_algorithm)}</span>
+                    </div>`;
+                }
+
+                // SANs
+                if (cert.san && cert.san.length > 0) {
+                    html += `<div style="padding:10px 14px;background:#0f172a;border-radius:6px;">
+                        <div style="color:#64748b;margin-bottom:8px;">Subject Alt Names (${cert.san.length})</div>
+                        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                            ${cert.san.map(s => `<span style="background:#1e293b;padding:4px 8px;border-radius:4px;font-family:monospace;font-size:0.8rem;color:#94a3b8;">${escapeHtml(s)}</span>`).join('')}
+                        </div>
+                    </div>`;
+                }
+
                 html += '</div></div>';
             }
             // Generic records
