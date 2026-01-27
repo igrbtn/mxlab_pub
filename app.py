@@ -2682,9 +2682,9 @@ def stream_domain_report():
             'ns': 0.8,          # Basic DNS
             'smtp': 0.8,        # Email connectivity
             'ssl': 0.8,         # Security
-            'txt': 0.5,         # Informational
-            'autodiscover': 0.4, # Optional (Exchange)
-            'aaaa': 0.2,        # IPv6 is optional
+            'txt': 0.1,         # Informational
+            'autodiscover': 0.1, # Optional (Exchange)
+            'aaaa': 0.1,        # IPv6 is optional
         }
 
         summary = {'total': 0, 'passed': 0, 'warnings': 0, 'errors': 0, 'score': 0}
