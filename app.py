@@ -2053,8 +2053,12 @@ def check_ssl_certificate(host, port=443, timeout=10):
                     # Subject Alternative Names
                     try:
                         san_ext = cert.extensions.get_extension_for_oid(x509.oid.ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
-                        cert_info['san'] = [name.value for name in san_ext.value.get_values_for_type(x509.DNSName)]
+                        san_values = san_ext.value.get_values_for_type(x509.DNSName)
+                        # Handle both old (objects with .value) and new (direct strings) cryptography versions
+                        cert_info['san'] = [str(name) for name in san_values]
                     except x509.ExtensionNotFound:
+                        cert_info['san'] = []
+                    except Exception:
                         cert_info['san'] = []
 
                     cert_info['valid'] = True
