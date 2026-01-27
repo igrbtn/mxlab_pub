@@ -355,12 +355,22 @@
 
         {% if report.email and report.email.headers %}
         <div class="card">
-            <button class="headers-toggle" onclick="toggleHeaders()">
-                <span>Raw Headers</span>
+            <button class="headers-toggle" onclick="toggleSection('headers')">
+                <span>Email Headers ({{ report.email.headers|length }})</span>
                 <span id="headers-arrow">▼</span>
             </button>
             <div class="headers-content" id="headers-content">{% for key, value in report.email.headers.items() %}{{ key }}: {{ value }}
 {% endfor %}</div>
+        </div>
+        {% endif %}
+
+        {% if report.email and report.email.raw %}
+        <div class="card">
+            <button class="headers-toggle" onclick="toggleSection('raw')">
+                <span>Raw Message ({{ report.email.raw|length|filesizeformat }})</span>
+                <span id="raw-arrow">▼</span>
+            </button>
+            <div class="headers-content" id="raw-content">{{ report.email.raw }}</div>
         </div>
         {% endif %}
 
@@ -453,9 +463,9 @@
     </div>
 
     <script>
-        function toggleHeaders() {
-            const content = document.getElementById('headers-content');
-            const arrow = document.getElementById('headers-arrow');
+        function toggleSection(section) {
+            const content = document.getElementById(section + '-content');
+            const arrow = document.getElementById(section + '-arrow');
             if (content.classList.contains('open')) {
                 content.classList.remove('open');
                 arrow.textContent = '▼';
@@ -463,6 +473,11 @@
                 content.classList.add('open');
                 arrow.textContent = '▲';
             }
+        }
+
+        // Legacy support
+        function toggleHeaders() {
+            toggleSection('headers');
         }
     </script>
 </body>

@@ -187,15 +187,20 @@ async def send_telegram_notification(test_id, email_data, analysis):
             emoji = "❌"
             status = "POOR"
 
+        # Count headers
+        headers = email_data.get('headers', {})
+        headers_count = len(headers)
+
         message = f"""{emoji} <b>MXtest Email Analysis</b>
 
 <b>Score:</b> {score:.1f}/10 — {status}
 <b>From:</b> <code>{sender}</code>
 <b>Subject:</b> {subject}
 <b>Sender IP:</b> <code>{sender_ip}</code>{f' (port {sender_port})' if sender_port else ''}
-<b>Test ID:</b> <code>{test_id}</code>
+<b>Headers:</b> {headers_count} headers captured
 
-🔗 <a href="https://{DOMAIN}/report/{test_id}">View Report</a>"""
+🔗 <a href="https://{DOMAIN}/report/{test_id}">View Full Report</a>
+<i>(includes headers + raw message)</i>"""
 
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
@@ -2299,9 +2304,10 @@ def full_domain_report():
 def run_smtp_server():
     """Run the SMTP server in a separate thread."""
     handler = MailHandler()
-    controller = Controller(handler, hostname='0.0.0.0', port=SMTP_PORT)
+    # Max message size 1MB (1048576 bytes)
+    controller = Controller(handler, hostname='0.0.0.0', port=SMTP_PORT, data_size_limit=1048576)
     controller.start()
-    print(f"[SMTP] Server running on port {SMTP_PORT}")
+    print(f"[SMTP] Server running on port {SMTP_PORT} (max message size: 1MB)")
     return controller
 
 
