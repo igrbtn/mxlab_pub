@@ -2176,7 +2176,98 @@
                 });
                 html += '</div></div>';
             }
-            // SSL Certificate
+            // SSL Certificate (comprehensive check with multiple hosts)
+            else if (checkName === 'ssl' && check.checks && check.checks.length > 0) {
+                // Summary
+                const summary = check.summary || {};
+                html += `<div class="check-data-section">
+                    <div class="check-data-title">SSL Certificate Summary</div>
+                    <div style="display:flex;gap:16px;margin-bottom:16px;">
+                        <div style="background:#0f172a;padding:12px 16px;border-radius:6px;text-align:center;">
+                            <div style="font-size:1.5rem;font-weight:600;color:#22c55e;">${summary.valid || 0}</div>
+                            <div style="color:#64748b;font-size:0.8rem;">Valid</div>
+                        </div>
+                        <div style="background:#0f172a;padding:12px 16px;border-radius:6px;text-align:center;">
+                            <div style="font-size:1.5rem;font-weight:600;color:#f59e0b;">${summary.warnings || 0}</div>
+                            <div style="color:#64748b;font-size:0.8rem;">Warnings</div>
+                        </div>
+                        <div style="background:#0f172a;padding:12px 16px;border-radius:6px;text-align:center;">
+                            <div style="font-size:1.5rem;font-weight:600;color:#ef4444;">${summary.errors || 0}</div>
+                            <div style="color:#64748b;font-size:0.8rem;">Errors</div>
+                        </div>
+                    </div>
+                </div>`;
+
+                // Group checks by type
+                const webChecks = check.checks.filter(c => c.type === 'Web Server');
+                const autodiscoverChecks = check.checks.filter(c => c.type && c.type.includes('Autodiscover'));
+                const mailChecks = check.checks.filter(c => c.type && c.type.includes('Mail'));
+
+                // Helper to render certificate row
+                function renderCertRow(c) {
+                    const statusColor = c.status === 'success' ? '#22c55e' : (c.status === 'warning' ? '#f59e0b' : '#ef4444');
+                    const cert = c.certificate;
+                    let details = '';
+                    if (cert) {
+                        const daysText = cert.expired ? 'EXPIRED' : `${cert.days_remaining} days`;
+                        details = `<div style="font-size:0.8rem;color:#64748b;margin-top:4px;">
+                            ${escapeHtml(cert.subject || '')} · ${daysText}
+                            ${cert.trusted ? '<span style="color:#22c55e;"> ✓</span>' : '<span style="color:#f59e0b;"> ⚠</span>'}
+                        </div>`;
+                    }
+                    return `<div style="background:#0f172a;border-radius:6px;padding:12px;border-left:3px solid ${statusColor};">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <div>
+                                <div style="font-family:monospace;color:#e2e8f0;">${escapeHtml(c.host || '')}:${c.port || 443}</div>
+                                <div style="font-size:0.75rem;color:#64748b;">${escapeHtml(c.type || '')}</div>
+                            </div>
+                            <div style="color:${statusColor};font-size:0.85rem;">${escapeHtml(c.message || c.status)}</div>
+                        </div>
+                        ${details}
+                    </div>`;
+                }
+
+                // Web Server certificates
+                if (webChecks.length > 0) {
+                    html += '<div class="check-data-section"><div class="check-data-title">Web Server</div><div style="display:grid;gap:8px;">';
+                    webChecks.forEach(c => { html += renderCertRow(c); });
+                    html += '</div></div>';
+                }
+
+                // Autodiscover certificates
+                if (autodiscoverChecks.length > 0) {
+                    html += '<div class="check-data-section"><div class="check-data-title">Autodiscover Endpoints</div><div style="display:grid;gap:8px;">';
+                    autodiscoverChecks.forEach(c => { html += renderCertRow(c); });
+                    html += '</div></div>';
+                }
+
+                // Mail Server certificates
+                if (mailChecks.length > 0) {
+                    html += '<div class="check-data-section"><div class="check-data-title">Mail Servers (SMTPS)</div><div style="display:grid;gap:8px;">';
+                    mailChecks.forEach(c => { html += renderCertRow(c); });
+                    html += '</div></div>';
+                }
+
+                // Expandable details for each certificate
+                check.checks.forEach((c, i) => {
+                    if (c.certificate) {
+                        const cert = c.certificate;
+                        html += `<details style="margin-top:8px;">
+                            <summary style="cursor:pointer;color:#3b82f6;font-size:0.85rem;">View details: ${escapeHtml(c.host)}:${c.port}</summary>
+                            <div style="background:#0f172a;border-radius:6px;padding:12px;margin-top:8px;display:grid;gap:6px;font-size:0.85rem;">
+                                <div><span style="color:#64748b;">Subject:</span> <span style="color:#e2e8f0;font-family:monospace;">${escapeHtml(cert.subject || 'N/A')}</span></div>
+                                <div><span style="color:#64748b;">Issuer:</span> <span style="color:#e2e8f0;font-family:monospace;">${escapeHtml(cert.issuer || 'N/A')}</span></div>
+                                <div><span style="color:#64748b;">Valid From:</span> <span style="color:#94a3b8;">${escapeHtml(cert.valid_from || 'N/A')}</span></div>
+                                <div><span style="color:#64748b;">Valid Until:</span> <span style="color:#94a3b8;">${escapeHtml(cert.valid_until || 'N/A')}</span></div>
+                                <div><span style="color:#64748b;">Days Remaining:</span> <span style="color:${cert.expired ? '#ef4444' : (cert.days_remaining < 30 ? '#f59e0b' : '#22c55e')};font-weight:600;">${cert.expired ? 'EXPIRED' : cert.days_remaining}</span></div>
+                                <div><span style="color:#64748b;">Trusted:</span> <span style="color:${cert.trusted ? '#22c55e' : '#f59e0b'};">${cert.trusted ? 'Yes' : 'No'}</span></div>
+                                ${cert.san && cert.san.length > 0 ? `<div><span style="color:#64748b;">SANs:</span> <span style="color:#94a3b8;font-size:0.8rem;">${cert.san.slice(0,5).map(s => escapeHtml(s)).join(', ')}${cert.san.length > 5 ? ` (+${cert.san.length-5} more)` : ''}</span></div>` : ''}
+                            </div>
+                        </details>`;
+                    }
+                });
+            }
+            // SSL Certificate (single host - fallback for API tool)
             else if (checkName === 'ssl' && check.certificate) {
                 const cert = check.certificate;
                 const daysColor = cert.expired ? '#ef4444' : (cert.days_remaining < 30 ? '#f59e0b' : '#22c55e');
@@ -2184,69 +2275,22 @@
 
                 html += '<div class="check-data-section"><div class="check-data-title">SSL Certificate Details</div>';
                 html += '<div style="display:grid;gap:8px;">';
-
-                // Subject
                 html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;">
                     <span style="color:#64748b;min-width:140px;">Subject</span>
                     <span style="color:#e2e8f0;font-family:monospace;">${escapeHtml(cert.subject || 'N/A')}</span>
                 </div>`;
-
-                // Issuer
                 html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;">
                     <span style="color:#64748b;min-width:140px;">Issuer</span>
                     <span style="color:#e2e8f0;font-family:monospace;">${escapeHtml(cert.issuer || 'N/A')}</span>
                 </div>`;
-
-                // Valid From
-                html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;">
-                    <span style="color:#64748b;min-width:140px;">Valid From</span>
-                    <span style="color:#e2e8f0;font-family:monospace;">${escapeHtml(cert.valid_from || 'N/A')}</span>
-                </div>`;
-
-                // Valid Until
-                html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;">
-                    <span style="color:#64748b;min-width:140px;">Valid Until</span>
-                    <span style="color:#e2e8f0;font-family:monospace;">${escapeHtml(cert.valid_until || 'N/A')}</span>
-                </div>`;
-
-                // Days Remaining (highlighted)
                 html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;border-left:3px solid ${daysColor};">
                     <span style="color:#64748b;min-width:140px;">Days Remaining</span>
-                    <span style="color:${daysColor};font-weight:600;font-size:1.1rem;">${cert.expired ? 'EXPIRED' : (cert.days_remaining !== null ? cert.days_remaining + ' days' : 'N/A')}</span>
+                    <span style="color:${daysColor};font-weight:600;">${cert.expired ? 'EXPIRED' : (cert.days_remaining !== null ? cert.days_remaining + ' days' : 'N/A')}</span>
                 </div>`;
-
-                // Trusted
                 html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;border-left:3px solid ${trustColor};">
                     <span style="color:#64748b;min-width:140px;">Trusted</span>
-                    <span style="color:${trustColor};font-weight:500;">${cert.trusted ? '✓ Yes - Valid chain of trust' : '⚠ No - Certificate not trusted'}</span>
+                    <span style="color:${trustColor};">${cert.trusted ? '✓ Yes' : '⚠ No'}</span>
                 </div>`;
-
-                // Serial Number
-                if (cert.serial) {
-                    html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;">
-                        <span style="color:#64748b;min-width:140px;">Serial Number</span>
-                        <span style="color:#94a3b8;font-family:monospace;font-size:0.85rem;">${escapeHtml(cert.serial)}</span>
-                    </div>`;
-                }
-
-                // Signature Algorithm
-                if (cert.signature_algorithm) {
-                    html += `<div style="display:flex;gap:12px;padding:10px 14px;background:#0f172a;border-radius:6px;">
-                        <span style="color:#64748b;min-width:140px;">Signature</span>
-                        <span style="color:#94a3b8;font-family:monospace;">${escapeHtml(cert.signature_algorithm)}</span>
-                    </div>`;
-                }
-
-                // SANs
-                if (cert.san && cert.san.length > 0) {
-                    html += `<div style="padding:10px 14px;background:#0f172a;border-radius:6px;">
-                        <div style="color:#64748b;margin-bottom:8px;">Subject Alt Names (${cert.san.length})</div>
-                        <div style="display:flex;flex-wrap:wrap;gap:6px;">
-                            ${cert.san.map(s => `<span style="background:#1e293b;padding:4px 8px;border-radius:4px;font-family:monospace;font-size:0.8rem;color:#94a3b8;">${escapeHtml(s)}</span>`).join('')}
-                        </div>
-                    </div>`;
-                }
-
                 html += '</div></div>';
             }
             // Generic records

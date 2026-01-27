@@ -1577,7 +1577,7 @@ def tool_aaaa_lookup(domain):
 
 
 def tool_ssl_check(host):
-    """Check SSL certificate for a host. Query can be hostname or hostname:port."""
+    """Check SSL certificate for a single host. Query can be hostname or hostname:port."""
     # Parse port from query if provided
     port = 443
     if ':' in host:
@@ -1589,85 +1589,40 @@ def tool_ssl_check(host):
             pass
 
     cert_result = check_ssl_certificate(host, port)
+    return _format_ssl_result(host, port, cert_result)
 
+
+def _format_ssl_result(host, port, cert_result):
+    """Format SSL check result for display."""
     result = {
-        'tool': 'SSL Certificate Check',
-        'query': f'{host}:{port}',
+        'host': host,
+        'port': port,
         'status': cert_result.get('status', 'error'),
-        'records': [],
-        'command': f'openssl s_client -connect {host}:{port} -servername {host} </dev/null 2>/dev/null | openssl x509 -noout -dates -subject -issuer'
+        'certificate': None
     }
 
     if cert_result.get('error'):
         result['message'] = cert_result['error']
         return result
 
-    if cert_result['valid']:
+    if cert_result.get('valid'):
         days = cert_result.get('days_remaining')
         subject = cert_result.get('subject', 'Unknown')
 
         # Build status message
-        if cert_result['expired']:
-            result['message'] = f'Certificate EXPIRED - {subject}'
+        if cert_result.get('expired'):
+            result['message'] = f'EXPIRED - {subject}'
             result['status'] = 'error'
-        elif cert_result['trusted']:
+        elif cert_result.get('trusted'):
             if days is not None and days < 30:
-                result['message'] = f'Certificate valid but EXPIRES SOON ({days} days) - {subject}'
+                result['message'] = f'{subject} - expires in {days} days'
                 result['status'] = 'warning'
             else:
-                result['message'] = f'Certificate valid and trusted - {days} days remaining'
+                result['message'] = f'{subject} - {days} days remaining'
                 result['status'] = 'success'
         else:
-            result['message'] = f'Certificate valid but NOT TRUSTED'
+            result['message'] = f'{subject} - NOT TRUSTED'
             result['status'] = 'warning'
-
-        # Build records for display
-        result['records'] = [{
-            'field': 'Subject',
-            'value': cert_result.get('subject')
-        }, {
-            'field': 'Issuer',
-            'value': cert_result.get('issuer')
-        }, {
-            'field': 'Valid From',
-            'value': cert_result.get('not_before')
-        }, {
-            'field': 'Valid Until',
-            'value': cert_result.get('not_after')
-        }, {
-            'field': 'Days Remaining',
-            'value': str(cert_result.get('days_remaining', 'N/A')),
-            'highlight': 'warning' if days is not None and days < 30 else ('error' if cert_result['expired'] else 'success')
-        }, {
-            'field': 'Trusted',
-            'value': 'Yes' if cert_result.get('trusted') else 'No',
-            'highlight': 'success' if cert_result.get('trusted') else 'warning'
-        }, {
-            'field': 'Serial Number',
-            'value': cert_result.get('serial')
-        }, {
-            'field': 'Version',
-            'value': cert_result.get('version')
-        }, {
-            'field': 'Signature Algorithm',
-            'value': cert_result.get('signature_algorithm')
-        }]
-
-        # Add SANs if present
-        sans = cert_result.get('san', [])
-        if sans:
-            result['records'].append({
-                'field': 'Subject Alt Names',
-                'value': ', '.join(sans[:10]) + (f' (+{len(sans)-10} more)' if len(sans) > 10 else '')
-            })
-
-        # Add trust error if not trusted
-        if not cert_result.get('trusted') and cert_result.get('trust_error'):
-            result['records'].append({
-                'field': 'Trust Error',
-                'value': cert_result.get('trust_error'),
-                'highlight': 'error'
-            })
 
         result['certificate'] = {
             'subject': cert_result.get('subject'),
@@ -1682,6 +1637,101 @@ def tool_ssl_check(host):
             'signature_algorithm': cert_result.get('signature_algorithm'),
             'san': cert_result.get('san', [])
         }
+
+    return result
+
+
+def tool_ssl_comprehensive_check(domain, mx_records=None, autodiscover_result=None):
+    """Comprehensive SSL certificate check for domain, mail servers, and autodiscover endpoints."""
+    result = {
+        'tool': 'SSL Certificate Check',
+        'query': domain,
+        'status': 'success',
+        'checks': [],
+        'summary': {
+            'total': 0,
+            'valid': 0,
+            'warnings': 0,
+            'errors': 0
+        },
+        'command': f'openssl s_client -connect {domain}:443 -servername {domain} </dev/null 2>/dev/null | openssl x509 -noout -dates -subject -issuer'
+    }
+
+    hosts_to_check = []
+
+    # 1. Main domain (HTTPS)
+    hosts_to_check.append({
+        'host': domain,
+        'port': 443,
+        'type': 'Web Server',
+        'description': f'Main domain ({domain})'
+    })
+
+    # 2. Autodiscover subdomain
+    autodiscover_host = f'autodiscover.{domain}'
+    hosts_to_check.append({
+        'host': autodiscover_host,
+        'port': 443,
+        'type': 'Autodiscover',
+        'description': f'Autodiscover ({autodiscover_host})'
+    })
+
+    # 3. Mail servers from MX records (check port 465 for SMTPS)
+    if mx_records and isinstance(mx_records, list):
+        seen_mx = set()
+        for mx in mx_records[:3]:  # Limit to first 3 MX servers
+            mx_host = mx.get('host', '')
+            if mx_host and mx_host not in seen_mx:
+                seen_mx.add(mx_host)
+                hosts_to_check.append({
+                    'host': mx_host,
+                    'port': 465,
+                    'type': 'Mail Server (SMTPS)',
+                    'description': f'MX: {mx_host}:465'
+                })
+
+    # 4. Additional autodiscover endpoints from autodiscover check
+    if autodiscover_result and autodiscover_result.get('checks'):
+        for check in autodiscover_result['checks']:
+            # Check SRV records for autodiscover targets
+            if check.get('type') == 'dns' and check.get('records'):
+                for srv in check.get('records', []):
+                    target = srv.get('target', '')
+                    if target and target not in [h['host'] for h in hosts_to_check]:
+                        hosts_to_check.append({
+                            'host': target,
+                            'port': 443,
+                            'type': 'Autodiscover SRV',
+                            'description': f'SRV target: {target}'
+                        })
+
+    # Run SSL checks for all hosts
+    for host_info in hosts_to_check:
+        cert_result = check_ssl_certificate(host_info['host'], host_info['port'])
+        check_result = _format_ssl_result(host_info['host'], host_info['port'], cert_result)
+        check_result['type'] = host_info['type']
+        check_result['description'] = host_info['description']
+
+        result['checks'].append(check_result)
+        result['summary']['total'] += 1
+
+        if check_result['status'] == 'success':
+            result['summary']['valid'] += 1
+        elif check_result['status'] == 'warning':
+            result['summary']['warnings'] += 1
+        else:
+            result['summary']['errors'] += 1
+
+    # Determine overall status
+    if result['summary']['errors'] > 0:
+        result['status'] = 'error'
+        result['message'] = f"{result['summary']['errors']} certificate error(s) found"
+    elif result['summary']['warnings'] > 0:
+        result['status'] = 'warning'
+        result['message'] = f"{result['summary']['warnings']} certificate warning(s)"
+    else:
+        result['status'] = 'success'
+        result['message'] = f"All {result['summary']['valid']} certificates valid"
 
     return result
 
@@ -2292,11 +2342,11 @@ def stream_domain_report():
         # Send start event
         yield send_event('start', {'domain': domain, 'total_checks': total_checks})
 
-        # 1. MX Lookup
-        result = tool_mx_lookup(domain)
-        result['rfc'] = RFC_TIPS['mx']
+        # 1. MX Lookup (store for later use)
+        mx_result = tool_mx_lookup(domain)
+        mx_result['rfc'] = RFC_TIPS['mx']
         checks_completed += 1
-        yield send_event('check', {'name': 'mx', 'result': result, 'progress': checks_completed})
+        yield send_event('check', {'name': 'mx', 'result': mx_result, 'progress': checks_completed})
 
         # 2. A Record
         result = tool_a_lookup(domain)
@@ -2342,20 +2392,22 @@ def stream_domain_report():
         checks_completed += 1
         yield send_event('check', {'name': 'dmarc', 'result': result, 'progress': checks_completed})
 
-        # 9. SSL Certificate
-        result = tool_ssl_check(domain)
-        checks_completed += 1
-        yield send_event('check', {'name': 'ssl', 'result': result, 'progress': checks_completed})
-
-        # 10. SMTP (slower)
+        # 9. SMTP (slower)
         result = tool_smtp_check(domain)
         checks_completed += 1
         yield send_event('check', {'name': 'smtp', 'result': result, 'progress': checks_completed})
 
-        # 11. Autodiscover (slower)
-        result = tool_autodiscover_check(domain)
+        # 10. Autodiscover (store for SSL check)
+        autodiscover_result = tool_autodiscover_check(domain)
         checks_completed += 1
-        yield send_event('check', {'name': 'autodiscover', 'result': result, 'progress': checks_completed})
+        yield send_event('check', {'name': 'autodiscover', 'result': autodiscover_result, 'progress': checks_completed})
+
+        # 11. SSL Certificate Check (after autodiscover to check all endpoints)
+        # Checks: main domain, autodiscover subdomain, mail servers (SMTPS)
+        mx_records = mx_result.get('records', []) if mx_result else []
+        result = tool_ssl_comprehensive_check(domain, mx_records, autodiscover_result)
+        checks_completed += 1
+        yield send_event('check', {'name': 'ssl', 'result': result, 'progress': checks_completed})
 
         # 12. Blacklist (need MX IP first)
         mx_result = tool_mx_lookup(domain)
@@ -2447,14 +2499,15 @@ def full_domain_report():
     report['checks']['dmarc'] = tool_dmarc_lookup(domain)
     report['checks']['dmarc']['rfc'] = RFC_TIPS['dmarc']
 
-    # SSL Certificate
-    report['checks']['ssl'] = tool_ssl_check(domain)
-
     # SMTP Connectivity
     report['checks']['smtp'] = tool_smtp_check(domain)
 
     # Autodiscover
     report['checks']['autodiscover'] = tool_autodiscover_check(domain)
+
+    # SSL Certificate (after autodiscover to check all endpoints)
+    mx_records = report['checks']['mx'].get('records', [])
+    report['checks']['ssl'] = tool_ssl_comprehensive_check(domain, mx_records, report['checks']['autodiscover'])
 
     # Blacklist check (if we have MX IPs)
     if report['checks']['mx'].get('records'):
