@@ -1781,7 +1781,36 @@
 
         function copyEmail() {
             const email = document.getElementById('generatedEmail').textContent;
-            navigator.clipboard.writeText(email);
+            const btn = document.querySelector('#emailAddress .copy-btn');
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(email).then(() => {
+                    btn.textContent = 'Copied!';
+                    setTimeout(() => btn.textContent = 'Copy', 2000);
+                }).catch(() => {
+                    fallbackCopy(email, btn);
+                });
+            } else {
+                fallbackCopy(email, btn);
+            }
+        }
+
+        function fallbackCopy(text, btn) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                btn.textContent = 'Copied!';
+                setTimeout(() => btn.textContent = 'Copy', 2000);
+            } catch (e) {
+                btn.textContent = 'Failed';
+                setTimeout(() => btn.textContent = 'Copy', 2000);
+            }
+            document.body.removeChild(textarea);
         }
 
         // Full Domain Report with progressive streaming
