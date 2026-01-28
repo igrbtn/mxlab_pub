@@ -1772,6 +1772,19 @@
                 <h2 style="margin-bottom: 12px; color: #f8fafc;">MXCallback Test</h2>
                 <p style="color: #94a3b8; margin-bottom: 24px;">Test bidirectional email delivery - send an email and receive a response with SMTP transaction logs</p>
 
+                <div class="callback-options" style="max-width: 400px; margin: 0 auto 24px;">
+                    <div class="checkbox-group" style="display: flex; flex-direction: column; gap: 12px;">
+                        <label class="checkbox-label" style="display: flex; align-items: center; gap: 10px; cursor: pointer; color: #e2e8f0;">
+                            <input type="checkbox" id="cbDeliveryReceipt" style="width: 18px; height: 18px; accent-color: #3b82f6;">
+                            <span>Request a Delivery Receipt (DSN)</span>
+                        </label>
+                        <label class="checkbox-label" style="display: flex; align-items: center; gap: 10px; cursor: pointer; color: #e2e8f0;">
+                            <input type="checkbox" id="cbReadReceipt" style="width: 18px; height: 18px; accent-color: #3b82f6;">
+                            <span>Request a Read Receipt (MDN)</span>
+                        </label>
+                    </div>
+                </div>
+
                 <div class="callback-generate">
                     <button class="btn" id="callbackGenerateBtn" onclick="generateCallbackTest()">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;margin-right:8px;vertical-align:middle;">
@@ -3423,8 +3436,18 @@
             btn.disabled = true;
             btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;margin-right:8px;display:inline-block;vertical-align:middle;"></div> Generating...';
 
+            const deliveryReceipt = document.getElementById('cbDeliveryReceipt').checked;
+            const readReceipt = document.getElementById('cbReadReceipt').checked;
+
             try {
-                const response = await fetch('/api/callback/generate', { method: 'POST' });
+                const response = await fetch('/api/callback/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        request_delivery_receipt: deliveryReceipt,
+                        request_read_receipt: readReceipt
+                    })
+                });
                 const data = await response.json();
 
                 currentCallbackId = data.callback_id;

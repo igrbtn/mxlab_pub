@@ -257,7 +257,7 @@ def generate_callback_id():
     return f"cb_{uuid.uuid4().hex[:10]}"
 
 
-def send_callback_email(to_email, callback_id, original_subject, smtp_logs):
+def send_callback_email(to_email, callback_id, original_subject, smtp_logs, request_delivery_receipt=False, request_read_receipt=False):
     """Send callback email back to the sender. Uses smarthost if configured."""
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
@@ -271,6 +271,16 @@ def send_callback_email(to_email, callback_id, original_subject, smtp_logs):
         msg['To'] = to_email
         msg['Subject'] = f"[MXLab Callback] Re: {original_subject}"
         msg['X-MXLab-Callback-ID'] = callback_id
+
+        # Add receipt request headers if requested
+        if request_delivery_receipt:
+            msg['Return-Receipt-To'] = from_addr
+            msg['X-Confirm-Reading-To'] = from_addr  # Legacy header
+            logs.append(f"[CALLBACK] Requesting delivery receipt to {from_addr}")
+        if request_read_receipt:
+            msg['Disposition-Notification-To'] = from_addr
+            logs.append(f"[CALLBACK] Requesting read receipt (MDN) to {from_addr}")
+
         body_text = f"MXLab Callback Test Result\n{'='*32}\n\nCallback ID: {callback_id}\nOriginal Subject: {original_subject}\nTested at: {datetime.now().isoformat()}\n\nSMTP Transaction Log:\n{chr(10).join(smtp_logs)}\n\n---\nMXLab"
         msg.attach(MIMEText(body_text, 'plain'))
         smtp_conversation = []
@@ -747,7 +757,14 @@ class MailHandler:
 
             def send_callback_async():
                 try:
-                    result = send_callback_email(envelope.mail_from, callback_id, email_data.get('subject', ''), smtp_receive_logs)
+                    # Get receipt options from callback test settings
+                    cb_test = callback_tests.get(callback_id, {})
+                    req_delivery = cb_test.get('request_delivery_receipt', False)
+                    req_read = cb_test.get('request_read_receipt', False)
+                    result = send_callback_email(
+                        envelope.mail_from, callback_id, email_data.get('subject', ''),
+                        smtp_receive_logs, req_delivery, req_read
+                    )
                     if callback_id in callback_tests:
                         callback_tests[callback_id]['status'] = 'completed' if result['success'] else 'send_failed'
                         callback_tests[callback_id]['send_result'] = result
@@ -1360,6 +1377,10 @@ def get_results(test_id):
 @app.route('/api/callback/generate', methods=['POST'])
 def generate_callback_test():
     """Generate a callback test email address."""
+    data = request.get_json() or {}
+    request_delivery_receipt = data.get('request_delivery_receipt', False)
+    request_read_receipt = data.get('request_read_receipt', False)
+
     callback_id = generate_callback_id()
     hostname = get_hostname()
     email = f"{callback_id}@{hostname}"
@@ -1367,7 +1388,9 @@ def generate_callback_test():
         'id': callback_id, 'email': email, 'status': 'waiting',
         'created_at': datetime.now().isoformat(),
         'expires_at': (datetime.now() + timedelta(hours=1)).isoformat(),
-        'receive_logs': [], 'send_result': None, 'error': None
+        'receive_logs': [], 'send_result': None, 'error': None,
+        'request_delivery_receipt': request_delivery_receipt,
+        'request_read_receipt': request_read_receipt
     }
     test_addresses[callback_id] = {
         'email': email, 'created': datetime.now().isoformat(),
@@ -1376,7 +1399,9 @@ def generate_callback_test():
     return jsonify({
         'callback_id': callback_id, 'email': email, 'smtp_port': SMTP_PORT, 'tls_enabled': TLS_ENABLED,
         'instructions': f'Send an email to {email}. Server will respond back.',
-        'check_url': f'/api/callback/status/{callback_id}'
+        'check_url': f'/api/callback/status/{callback_id}',
+        'request_delivery_receipt': request_delivery_receipt,
+        'request_read_receipt': request_read_receipt
     })
 
 
