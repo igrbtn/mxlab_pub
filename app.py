@@ -173,17 +173,6 @@ SMARTHOST_PASSWORD = os.environ.get('SMARTHOST_PASSWORD', '')
 SMARTHOST_TLS = os.environ.get('SMARTHOST_TLS', 'starttls').lower()
 SMARTHOST_FROM = os.environ.get('SMARTHOST_FROM', '')
 
-# SAML SSO Configuration (optional)
-SAML_ENABLED = os.environ.get('SAML_ENABLED', 'false').lower() == 'true'
-SAML_IDP_METADATA_URL = os.environ.get('SAML_IDP_METADATA_URL', '')
-SAML_IDP_ENTITY_ID = os.environ.get('SAML_IDP_ENTITY_ID', '')
-SAML_IDP_SSO_URL = os.environ.get('SAML_IDP_SSO_URL', '')
-SAML_IDP_SLO_URL = os.environ.get('SAML_IDP_SLO_URL', '')
-SAML_IDP_CERT = os.environ.get('SAML_IDP_CERT', '')
-SAML_SP_ENTITY_ID = os.environ.get('SAML_SP_ENTITY_ID', f'https://{DOMAIN}/saml')
-SAML_SP_ACS_URL = os.environ.get('SAML_SP_ACS_URL', f'https://{DOMAIN}/saml/acs')
-SAML_REQUIRED_PATHS = os.environ.get('SAML_REQUIRED_PATHS', '/admin,/api/admin').split(',')
-
 # Rate limiting storage
 rate_limit_store = {
     'by_ip': defaultdict(list),
@@ -1285,75 +1274,6 @@ def check_server_versions(msg):
         'status': 'pass',
         'message': 'No version information detected in headers'
     }
-
-
-# SAML Authentication (if enabled)
-saml_sessions = {}
-
-if SAML_ENABLED:
-    try:
-        from onelogin.saml2.auth import OneLogin_Saml2_Auth
-        from onelogin.saml2.utils import OneLogin_Saml2_Utils
-        SAML_AVAILABLE = True
-        print(f"[SAML] SSO enabled")
-    except ImportError:
-        SAML_AVAILABLE = False
-        print("[SAML] python3-saml not installed")
-else:
-    SAML_AVAILABLE = False
-
-
-def get_saml_settings():
-    return {
-        "strict": True, "debug": False,
-        "sp": {"entityId": SAML_SP_ENTITY_ID, "assertionConsumerService": {"url": SAML_SP_ACS_URL, "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"}},
-        "idp": {"entityId": SAML_IDP_ENTITY_ID, "singleSignOnService": {"url": SAML_IDP_SSO_URL, "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"}, "x509cert": SAML_IDP_CERT}
-    }
-
-
-@app.route('/saml/login')
-def saml_login():
-    if not SAML_AVAILABLE:
-        return jsonify({'error': 'SAML not configured'}), 400
-    req = {'https': 'on' if request.scheme == 'https' else 'off', 'http_host': request.host, 'script_name': request.path, 'get_data': request.args.copy(), 'post_data': request.form.copy()}
-    auth = OneLogin_Saml2_Auth(req, get_saml_settings())
-    return redirect(auth.login(return_to=request.args.get('return', '/')))
-
-
-@app.route('/saml/acs', methods=['POST'])
-def saml_acs():
-    if not SAML_AVAILABLE:
-        return jsonify({'error': 'SAML not configured'}), 400
-    req = {'https': 'on' if request.scheme == 'https' else 'off', 'http_host': request.host, 'script_name': request.path, 'get_data': request.args.copy(), 'post_data': request.form.copy()}
-    auth = OneLogin_Saml2_Auth(req, get_saml_settings())
-    auth.process_response()
-    if auth.get_errors() or not auth.is_authenticated():
-        return jsonify({'error': 'SAML auth failed'}), 401
-    session_id = uuid.uuid4().hex
-    saml_sessions[session_id] = {'user': auth.get_nameid(), 'expires': (datetime.now() + timedelta(hours=8)).isoformat()}
-    response = redirect(request.form.get('RelayState', '/'))
-    response.set_cookie('mxlab_saml_session', session_id, httponly=True, secure=True)
-    return response
-
-
-@app.route('/saml/logout')
-def saml_logout():
-    session_id = request.cookies.get('mxlab_saml_session')
-    if session_id and session_id in saml_sessions:
-        del saml_sessions[session_id]
-    response = redirect('/')
-    response.delete_cookie('mxlab_saml_session')
-    return response
-
-
-@app.route('/api/auth/status')
-def auth_status():
-    session_id = request.cookies.get('mxlab_saml_session')
-    if session_id and session_id in saml_sessions:
-        s = saml_sessions[session_id]
-        if datetime.fromisoformat(s['expires']) > datetime.now():
-            return jsonify({'authenticated': True, 'user': s['user'], 'method': 'saml'})
-    return jsonify({'authenticated': not SAML_ENABLED, 'saml_enabled': SAML_ENABLED})
 
 
 # Flask Routes

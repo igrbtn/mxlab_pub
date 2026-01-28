@@ -25,11 +25,6 @@ services:
       - SMARTHOST_USERNAME=${SMARTHOST_USERNAME:-}
       - SMARTHOST_PASSWORD=${SMARTHOST_PASSWORD:-}
       - SMARTHOST_TLS=${SMARTHOST_TLS:-starttls}
-      # SAML SSO - set in .env
-      - SAML_ENABLED=${SAML_ENABLED:-false}
-      - SAML_IDP_ENTITY_ID=${SAML_IDP_ENTITY_ID:-}
-      - SAML_IDP_SSO_URL=${SAML_IDP_SSO_URL:-}
-      - SAML_IDP_CERT=${SAML_IDP_CERT:-}
     env_file:
       - .env
     volumes:
