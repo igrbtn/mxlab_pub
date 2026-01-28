@@ -881,7 +881,7 @@ def check_server_versions(msg):
         # Microsoft Exchange versions
         r'Microsoft-Server-ActiveSync/(\d+\.\d+)': ('Exchange ActiveSync', '15.0', 'Exchange 2010 or older'),
         r'Microsoft Exchange Server (\d+)': ('Exchange', '2016', 'Exchange 2013 or older'),
-        r'Microsoft SMTP Server.*?(\d+\.\d+\.\d+)': ('MS SMTP', '15.0.0', 'Old Microsoft SMTP'),
+        r'Microsoft SMTP Server.*?(\d+\.\d+\.\d+)': ('Microsoft Exchange', '15.0.0', 'Old Exchange version'),
 
         # Postfix
         r'Postfix.*?(\d+\.\d+\.\d+)': ('Postfix', '3.5.0', 'Postfix < 3.5'),
@@ -1965,6 +1965,87 @@ def tool_ssl_comprehensive_check(domain, mx_records=None, autodiscover_result=No
     return result
 
 
+def parse_exchange_version(banner):
+    """Parse Microsoft Exchange version from SMTP banner and return version info with CU/SU."""
+    import re
+
+    if not banner:
+        return None
+
+    # Exchange version build number to CU mapping
+    exchange_versions = {
+        '15.2': {
+            '1544': ('Exchange 2019', 'CU14'), '1258': ('Exchange 2019', 'CU13'),
+            '1118': ('Exchange 2019', 'CU12'), '986': ('Exchange 2019', 'CU11'),
+            '922': ('Exchange 2019', 'CU10'), '858': ('Exchange 2019', 'CU9'),
+            '792': ('Exchange 2019', 'CU8'), '721': ('Exchange 2019', 'CU7'),
+            '659': ('Exchange 2019', 'CU6'), '595': ('Exchange 2019', 'CU5'),
+            '529': ('Exchange 2019', 'CU4'), '464': ('Exchange 2019', 'CU3'),
+            '397': ('Exchange 2019', 'CU2'), '330': ('Exchange 2019', 'CU1'),
+            '196': ('Exchange 2019', 'RTM'),
+        },
+        '15.1': {
+            '2507': ('Exchange 2016', 'CU23'), '2375': ('Exchange 2016', 'CU22'),
+            '2308': ('Exchange 2016', 'CU21'), '2242': ('Exchange 2016', 'CU20'),
+            '2176': ('Exchange 2016', 'CU19'), '2106': ('Exchange 2016', 'CU18'),
+            '2044': ('Exchange 2016', 'CU17'), '1979': ('Exchange 2016', 'CU16'),
+            '1913': ('Exchange 2016', 'CU15'), '1847': ('Exchange 2016', 'CU14'),
+            '1779': ('Exchange 2016', 'CU13'), '1713': ('Exchange 2016', 'CU12'),
+            '1591': ('Exchange 2016', 'CU11'), '1531': ('Exchange 2016', 'CU10'),
+            '1466': ('Exchange 2016', 'CU9'), '1415': ('Exchange 2016', 'CU8'),
+            '1261': ('Exchange 2016', 'CU7'), '1034': ('Exchange 2016', 'CU6'),
+            '845': ('Exchange 2016', 'CU5'), '669': ('Exchange 2016', 'CU4'),
+            '544': ('Exchange 2016', 'CU3'), '466': ('Exchange 2016', 'CU2'),
+            '396': ('Exchange 2016', 'CU1'), '225': ('Exchange 2016', 'RTM'),
+        },
+        '15.0': {
+            '1497': ('Exchange 2013', 'CU23'), '1473': ('Exchange 2013', 'CU22'),
+            '1395': ('Exchange 2013', 'CU21'), '1367': ('Exchange 2013', 'CU20'),
+            '1365': ('Exchange 2013', 'CU19'), '1347': ('Exchange 2013', 'CU18'),
+            '1320': ('Exchange 2013', 'CU17'), '1293': ('Exchange 2013', 'CU16'),
+            '1263': ('Exchange 2013', 'CU15'), '1236': ('Exchange 2013', 'CU14'),
+            '1210': ('Exchange 2013', 'CU13'), '1178': ('Exchange 2013', 'CU12'),
+            '1156': ('Exchange 2013', 'CU11'), '1130': ('Exchange 2013', 'CU10'),
+            '1104': ('Exchange 2013', 'CU9'), '1076': ('Exchange 2013', 'CU8'),
+            '1044': ('Exchange 2013', 'CU7'), '995': ('Exchange 2013', 'CU6'),
+            '913': ('Exchange 2013', 'CU5'), '847': ('Exchange 2013', 'CU4'),
+            '775': ('Exchange 2013', 'CU3'), '712': ('Exchange 2013', 'CU2'),
+            '620': ('Exchange 2013', 'CU1'), '516': ('Exchange 2013', 'RTM'),
+        },
+    }
+
+    version_match = re.search(r'Version[:\s]+(\d+)\.(\d+)\.(\d+)\.(\d+)', banner, re.IGNORECASE)
+    if version_match:
+        major, minor, build, revision = version_match.groups()
+        version_key = f"{major}.{minor}"
+        full_version = f"{major}.{minor}.{build}.{revision}"
+
+        if version_key in exchange_versions:
+            builds = exchange_versions[version_key]
+            for build_prefix, (product, cu) in builds.items():
+                if build.startswith(build_prefix) or build == build_prefix:
+                    return {
+                        'detected': True, 'server': 'Microsoft Exchange',
+                        'product': product, 'cu': cu, 'version': full_version,
+                        'display': f"Microsoft Exchange ({product} {cu})"
+                    }
+            product_name = f"Exchange {'2019' if version_key == '15.2' else '2016' if version_key == '15.1' else '2013'}"
+            return {
+                'detected': True, 'server': 'Microsoft Exchange',
+                'product': product_name, 'cu': 'Unknown CU', 'version': full_version,
+                'display': f"Microsoft Exchange ({product_name} Build {build})"
+            }
+
+    if 'Microsoft' in banner and ('ESMTP' in banner or 'SMTP' in banner):
+        return {
+            'detected': True, 'server': 'Microsoft Exchange',
+            'product': 'Exchange/O365', 'cu': None, 'version': None,
+            'display': 'Microsoft Exchange'
+        }
+
+    return None
+
+
 def check_smtp_connectivity(host, port=25, timeout=10, test_open_relay=True):
     """Check SMTP connectivity with full connection transcript and open relay test."""
     result = {
@@ -1977,6 +2058,7 @@ def check_smtp_connectivity(host, port=25, timeout=10, test_open_relay=True):
         'starttls': False,
         'open_relay': None,  # None = not tested, True = vulnerable, False = secure
         'banner': None,
+        'exchange_info': None,  # Microsoft Exchange version info if detected
         'capabilities': [],
         'transcript': [],
         'message': ''
@@ -2000,6 +2082,12 @@ def check_smtp_connectivity(host, port=25, timeout=10, test_open_relay=True):
         banner = sock.recv(1024).decode('utf-8', errors='replace').strip()
         result['banner'] = banner
         log('recv', banner)
+
+        # Check for Microsoft Exchange version in banner
+        exchange_info = parse_exchange_version(banner)
+        if exchange_info:
+            result['exchange_info'] = exchange_info
+            log('info', f'Detected: {exchange_info["display"]}')
 
         if not banner.startswith('220'):
             result['message'] = f'Invalid banner response'
