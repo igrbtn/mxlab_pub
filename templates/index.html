@@ -1261,6 +1261,190 @@
             }
         }
 
+        /* MXCallback Styles */
+        .callback-generate {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        .callback-info {
+            animation: fadeIn 0.3s ease;
+        }
+
+        .callback-email-display {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 24px;
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        .callback-status-card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 24px;
+        }
+
+        .callback-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .callback-step {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 12px;
+            border-radius: 8px;
+            background: #0f172a;
+        }
+
+        .step-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .step-icon svg {
+            width: 20px;
+            height: 20px;
+        }
+
+        .step-icon.pending {
+            background: #334155;
+            color: #64748b;
+        }
+
+        .step-icon.active {
+            background: #3b82f6;
+            color: white;
+            animation: pulse 1.5s infinite;
+        }
+
+        .step-icon.success {
+            background: #22c55e;
+            color: white;
+        }
+
+        .step-icon.error {
+            background: #ef4444;
+            color: white;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .step-info {
+            flex: 1;
+        }
+
+        .step-title {
+            color: #f8fafc;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .step-desc {
+            color: #64748b;
+            font-size: 0.85rem;
+        }
+
+        .callback-results {
+            margin-top: 24px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .callback-logs-section {
+            background: #1e293b;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+
+        .logs-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px;
+            cursor: pointer;
+            color: #f8fafc;
+            font-weight: 500;
+        }
+
+        .logs-header:hover {
+            background: rgba(255,255,255,0.05);
+        }
+
+        .logs-header .chevron {
+            width: 20px;
+            height: 20px;
+            transition: transform 0.2s;
+        }
+
+        .logs-header.expanded .chevron {
+            transform: rotate(180deg);
+        }
+
+        .callback-logs {
+            display: none;
+            background: #0f172a;
+            padding: 16px;
+            margin: 0;
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #94a3b8;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .callback-logs.expanded {
+            display: block;
+        }
+
+        .callback-summary {
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 16px;
+        }
+
+        .callback-summary .summary-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #334155;
+        }
+
+        .callback-summary .summary-row:last-child {
+            border-bottom: none;
+        }
+
+        .callback-summary .summary-label {
+            color: #94a3b8;
+        }
+
+        .callback-summary .summary-value {
+            color: #f8fafc;
+            font-weight: 500;
+        }
+
+        .callback-summary .summary-value.success {
+            color: #22c55e;
+        }
+
+        .callback-summary .summary-value.error {
+            color: #ef4444;
+        }
+
         /* Exchange Connectivity Test Styles */
         .exchange-form {
             max-width: 600px;
@@ -1479,6 +1663,7 @@
         <div class="main-tabs">
             <button class="main-tab active" onclick="showMainTab('mxtest')">MXtest</button>
             <button class="main-tab" onclick="showMainTab('tools')">MXlab Lookup</button>
+            <button class="main-tab" onclick="showMainTab('callback')">MXCallback</button>
             <button class="main-tab" onclick="showMainTab('exchange')">ExchLookup</button>
         </div>
 
@@ -1577,6 +1762,114 @@
                     <div class="report-checks" id="reportChecks">
                         <!-- Checks will be inserted here -->
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- MXCallback Content -->
+        <div class="main-content" id="callbackContent">
+            <div class="card tools-section">
+                <h2 style="margin-bottom: 12px; color: #f8fafc;">MXCallback Test</h2>
+                <p style="color: #94a3b8; margin-bottom: 24px;">Test bidirectional email delivery - send an email and receive a response with SMTP transaction logs</p>
+
+                <div class="callback-generate">
+                    <button class="btn" id="callbackGenerateBtn" onclick="generateCallbackTest()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;margin-right:8px;vertical-align:middle;">
+                            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                            <polyline points="22,6 12,13 2,6"/>
+                        </svg>
+                        Generate Callback Test Address
+                    </button>
+                </div>
+
+                <div class="callback-info" id="callbackInfo" style="display: none;">
+                    <div class="callback-email-display">
+                        <p class="instructions">Send your test email to:</p>
+                        <div class="email-address">
+                            <span id="callbackEmail"></span>
+                            <button class="copy-btn" onclick="copyCallbackEmail()">Copy</button>
+                        </div>
+                        <p style="color: #64748b; font-size: 0.85rem; margin-top: 12px;">
+                            MXLab will receive your email and send a response back with SMTP transaction logs
+                        </p>
+                    </div>
+
+                    <div class="callback-status-card" id="callbackStatusCard">
+                        <div class="callback-steps">
+                            <div class="callback-step" id="stepWaiting">
+                                <div class="step-icon pending">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10"/>
+                                        <path d="M12 6v6l4 2"/>
+                                    </svg>
+                                </div>
+                                <div class="step-info">
+                                    <div class="step-title">Waiting for Email</div>
+                                    <div class="step-desc" id="stepWaitingDesc">Send an email to the address above</div>
+                                </div>
+                            </div>
+
+                            <div class="callback-step" id="stepReceived">
+                                <div class="step-icon pending">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                                    </svg>
+                                </div>
+                                <div class="step-info">
+                                    <div class="step-title">Email Received</div>
+                                    <div class="step-desc" id="stepReceivedDesc">Waiting...</div>
+                                </div>
+                            </div>
+
+                            <div class="callback-step" id="stepSending">
+                                <div class="step-icon pending">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="22" y1="2" x2="11" y2="13"/>
+                                        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                                    </svg>
+                                </div>
+                                <div class="step-info">
+                                    <div class="step-title">Sending Response</div>
+                                    <div class="step-desc" id="stepSendingDesc">Waiting...</div>
+                                </div>
+                            </div>
+
+                            <div class="callback-step" id="stepComplete">
+                                <div class="step-icon pending">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                                        <polyline points="22 4 12 14.01 9 11.01"/>
+                                    </svg>
+                                </div>
+                                <div class="step-info">
+                                    <div class="step-title">Complete</div>
+                                    <div class="step-desc" id="stepCompleteDesc">Waiting...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="callback-results" id="callbackResults" style="display: none;">
+                    <h3 style="color: #f8fafc; margin-bottom: 16px;">SMTP Transaction Logs</h3>
+
+                    <div class="callback-logs-section">
+                        <div class="logs-header" onclick="toggleLogs('receiveLogs')">
+                            <span>📥 Inbound SMTP (Your Email → MXLab)</span>
+                            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </div>
+                        <pre class="callback-logs" id="receiveLogs"></pre>
+                    </div>
+
+                    <div class="callback-logs-section">
+                        <div class="logs-header" onclick="toggleLogs('sendLogs')">
+                            <span>📤 Outbound SMTP (MXLab → Your Server)</span>
+                            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </div>
+                        <pre class="callback-logs" id="sendLogs"></pre>
+                    </div>
+
+                    <div class="callback-summary" id="callbackSummary"></div>
                 </div>
             </div>
         </div>
@@ -1859,8 +2152,13 @@
             document.querySelectorAll('.main-content').forEach(c => c.classList.remove('active'));
 
             document.querySelector(`.main-tab[onclick="showMainTab('${tab}')"]`).classList.add('active');
-            const contentId = tab === 'mxtest' ? 'mxtestContent' : (tab === 'tools' ? 'toolsContent' : 'exchangeContent');
-            document.getElementById(contentId).classList.add('active');
+            const contentMap = {
+                'mxtest': 'mxtestContent',
+                'tools': 'toolsContent',
+                'callback': 'callbackContent',
+                'exchange': 'exchangeContent'
+            };
+            document.getElementById(contentMap[tab] || 'mxtestContent').classList.add('active');
         }
 
         // Tool selection
@@ -3114,6 +3412,190 @@
             a.download = `exchange-test-${Date.now()}.html`;
             a.click();
             URL.revokeObjectURL(url);
+        }
+
+        // MXCallback functions
+        let currentCallbackId = null;
+        let callbackCheckInterval = null;
+
+        async function generateCallbackTest() {
+            const btn = document.getElementById('callbackGenerateBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;margin-right:8px;display:inline-block;vertical-align:middle;"></div> Generating...';
+
+            try {
+                const response = await fetch('/api/callback/generate', { method: 'POST' });
+                const data = await response.json();
+
+                currentCallbackId = data.callback_id;
+
+                document.getElementById('callbackEmail').textContent = data.email;
+                document.getElementById('callbackInfo').style.display = 'block';
+                document.getElementById('callbackResults').style.display = 'none';
+
+                // Reset steps
+                resetCallbackSteps();
+                updateCallbackStep('stepWaiting', 'active', 'Waiting for your email...');
+
+                // Start polling
+                if (callbackCheckInterval) clearInterval(callbackCheckInterval);
+                callbackCheckInterval = setInterval(checkCallbackStatus, 2000);
+
+                btn.disabled = false;
+                btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;margin-right:8px;vertical-align:middle;">
+                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                    <polyline points="22,6 12,13 2,6"/>
+                </svg> Generate New Callback Test`;
+
+            } catch (error) {
+                console.error('Error:', error);
+                btn.disabled = false;
+                btn.innerHTML = 'Generate Callback Test Address';
+                alert('Error generating callback test. Please try again.');
+            }
+        }
+
+        function resetCallbackSteps() {
+            ['stepWaiting', 'stepReceived', 'stepSending', 'stepComplete'].forEach(step => {
+                const el = document.getElementById(step);
+                el.querySelector('.step-icon').className = 'step-icon pending';
+            });
+        }
+
+        function updateCallbackStep(stepId, status, desc) {
+            const step = document.getElementById(stepId);
+            const icon = step.querySelector('.step-icon');
+            const descEl = step.querySelector('.step-desc');
+
+            icon.className = `step-icon ${status}`;
+            if (desc) descEl.textContent = desc;
+        }
+
+        async function checkCallbackStatus() {
+            if (!currentCallbackId) return;
+
+            try {
+                const response = await fetch(`/api/callback/status/${currentCallbackId}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    console.error('Callback status error:', data.error);
+                    return;
+                }
+
+                // Update steps based on status
+                if (data.status === 'waiting') {
+                    updateCallbackStep('stepWaiting', 'active', 'Waiting for your email...');
+                } else if (data.status === 'received') {
+                    updateCallbackStep('stepWaiting', 'success', 'Email received!');
+                    updateCallbackStep('stepReceived', 'success', `Received at ${formatTime(data.received_at)}`);
+                    updateCallbackStep('stepSending', 'active', 'Sending callback response...');
+                } else if (data.status === 'completed') {
+                    clearInterval(callbackCheckInterval);
+
+                    updateCallbackStep('stepWaiting', 'success', 'Email received!');
+                    updateCallbackStep('stepReceived', 'success', `Received at ${formatTime(data.received_at)}`);
+                    updateCallbackStep('stepSending', 'success', 'Response sent!');
+                    updateCallbackStep('stepComplete', 'success', 'Callback test completed successfully!');
+
+                    // Show results
+                    displayCallbackResults(data);
+                } else if (data.status === 'send_failed' || data.status === 'error') {
+                    clearInterval(callbackCheckInterval);
+
+                    updateCallbackStep('stepWaiting', 'success', 'Email received!');
+                    updateCallbackStep('stepReceived', 'success', data.received_at ? `Received at ${formatTime(data.received_at)}` : 'Received');
+                    updateCallbackStep('stepSending', 'error', 'Failed to send response');
+                    updateCallbackStep('stepComplete', 'error', data.error || data.send_result?.error || 'Callback failed');
+
+                    // Show results with error
+                    displayCallbackResults(data);
+                }
+            } catch (error) {
+                console.error('Error checking callback status:', error);
+            }
+        }
+
+        function formatTime(isoString) {
+            if (!isoString) return '';
+            const date = new Date(isoString);
+            return date.toLocaleTimeString();
+        }
+
+        function displayCallbackResults(data) {
+            const resultsDiv = document.getElementById('callbackResults');
+            const receiveLogsEl = document.getElementById('receiveLogs');
+            const sendLogsEl = document.getElementById('sendLogs');
+            const summaryEl = document.getElementById('callbackSummary');
+
+            // Receive logs
+            if (data.receive_logs && data.receive_logs.length > 0) {
+                receiveLogsEl.textContent = data.receive_logs.join('\n');
+            } else {
+                receiveLogsEl.textContent = 'No receive logs available';
+            }
+
+            // Send logs
+            if (data.send_result && data.send_result.logs) {
+                sendLogsEl.textContent = data.send_result.logs.join('\n');
+            } else if (data.send_result && data.send_result.error) {
+                sendLogsEl.textContent = `Error: ${data.send_result.error}`;
+            } else {
+                sendLogsEl.textContent = 'No send logs available';
+            }
+
+            // Summary
+            const success = data.status === 'completed';
+            summaryEl.innerHTML = `
+                <div class="summary-row">
+                    <span class="summary-label">Status</span>
+                    <span class="summary-value ${success ? 'success' : 'error'}">${success ? 'Completed' : 'Failed'}</span>
+                </div>
+                <div class="summary-row">
+                    <span class="summary-label">Callback ID</span>
+                    <span class="summary-value">${data.id || currentCallbackId}</span>
+                </div>
+                ${data.received_at ? `<div class="summary-row">
+                    <span class="summary-label">Email Received</span>
+                    <span class="summary-value">${new Date(data.received_at).toLocaleString()}</span>
+                </div>` : ''}
+                ${data.send_result?.success !== undefined ? `<div class="summary-row">
+                    <span class="summary-label">Response Sent</span>
+                    <span class="summary-value ${data.send_result.success ? 'success' : 'error'}">${data.send_result.success ? 'Yes' : 'No'}</span>
+                </div>` : ''}
+                ${data.send_result?.smtp_response ? `<div class="summary-row">
+                    <span class="summary-label">SMTP Response</span>
+                    <span class="summary-value">${escapeHtml(data.send_result.smtp_response)}</span>
+                </div>` : ''}
+            `;
+
+            resultsDiv.style.display = 'block';
+
+            // Auto-expand logs
+            document.querySelectorAll('.callback-logs-section .logs-header').forEach(h => {
+                h.classList.add('expanded');
+            });
+            document.querySelectorAll('.callback-logs').forEach(l => {
+                l.classList.add('expanded');
+            });
+        }
+
+        function toggleLogs(logsId) {
+            const header = document.querySelector(`#${logsId}`).previousElementSibling;
+            const logs = document.getElementById(logsId);
+
+            header.classList.toggle('expanded');
+            logs.classList.toggle('expanded');
+        }
+
+        function copyCallbackEmail() {
+            const email = document.getElementById('callbackEmail').textContent;
+            navigator.clipboard.writeText(email).then(() => {
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = 'Copied!';
+                setTimeout(() => btn.textContent = originalText, 1500);
+            });
         }
     </script>
 </body>
