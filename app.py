@@ -164,6 +164,26 @@ RATE_LIMIT_PER_EMAIL = int(os.environ.get('RATE_LIMIT_PER_EMAIL', 2))
 RATE_LIMIT_PER_DOMAIN = int(os.environ.get('RATE_LIMIT_PER_DOMAIN', 10))
 RATE_LIMIT_WINDOW = 60  # seconds
 
+# Smarthost configuration (mail gateway/relay for outbound email)
+SMARTHOST_ENABLED = os.environ.get('SMARTHOST_ENABLED', 'false').lower() == 'true'
+SMARTHOST_HOST = os.environ.get('SMARTHOST_HOST', '')
+SMARTHOST_PORT = int(os.environ.get('SMARTHOST_PORT', 587))
+SMARTHOST_USERNAME = os.environ.get('SMARTHOST_USERNAME', '')
+SMARTHOST_PASSWORD = os.environ.get('SMARTHOST_PASSWORD', '')
+SMARTHOST_TLS = os.environ.get('SMARTHOST_TLS', 'starttls').lower()
+SMARTHOST_FROM = os.environ.get('SMARTHOST_FROM', '')
+
+# SAML SSO Configuration (optional)
+SAML_ENABLED = os.environ.get('SAML_ENABLED', 'false').lower() == 'true'
+SAML_IDP_METADATA_URL = os.environ.get('SAML_IDP_METADATA_URL', '')
+SAML_IDP_ENTITY_ID = os.environ.get('SAML_IDP_ENTITY_ID', '')
+SAML_IDP_SSO_URL = os.environ.get('SAML_IDP_SSO_URL', '')
+SAML_IDP_SLO_URL = os.environ.get('SAML_IDP_SLO_URL', '')
+SAML_IDP_CERT = os.environ.get('SAML_IDP_CERT', '')
+SAML_SP_ENTITY_ID = os.environ.get('SAML_SP_ENTITY_ID', f'https://{DOMAIN}/saml')
+SAML_SP_ACS_URL = os.environ.get('SAML_SP_ACS_URL', f'https://{DOMAIN}/saml/acs')
+SAML_REQUIRED_PATHS = os.environ.get('SAML_REQUIRED_PATHS', '/admin,/api/admin').split(',')
+
 # Rate limiting storage
 rate_limit_store = {
     'by_ip': defaultdict(list),
@@ -249,58 +269,83 @@ def generate_callback_id():
 
 
 def send_callback_email(to_email, callback_id, original_subject, smtp_logs):
-    """Send callback email back to the sender with SMTP transaction logs."""
+    """Send callback email back to the sender. Uses smarthost if configured."""
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
     logs = []
-    result = {'success': False, 'smtp_log': [], 'error': None, 'tls_used': False, 'sent_at': None}
+    result = {'success': False, 'smtp_log': [], 'error': None, 'tls_used': False, 'sent_at': None, 'smarthost_used': False}
     try:
-        domain = to_email.split('@')[1]
         logs.append(f"[CALLBACK] Starting callback to {to_email}")
-        mx_records = []
-        try:
-            answers = dns.resolver.resolve(domain, 'MX')
-            for rdata in answers:
-                mx_records.append((rdata.preference, str(rdata.exchange).rstrip('.')))
-            mx_records.sort(key=lambda x: x[0])
-        except:
-            mx_records = [(0, domain)]
-        result['mx_records'] = mx_records
-        for priority, mx_host in mx_records:
+        from_addr = SMARTHOST_FROM if SMARTHOST_FROM else f"callback@{DOMAIN}"
+        msg = MIMEMultipart('alternative')
+        msg['From'] = from_addr
+        msg['To'] = to_email
+        msg['Subject'] = f"[MXLab Callback] Re: {original_subject}"
+        msg['X-MXLab-Callback-ID'] = callback_id
+        body_text = f"MXLab Callback Test Result\n{'='*32}\n\nCallback ID: {callback_id}\nOriginal Subject: {original_subject}\nTested at: {datetime.now().isoformat()}\n\nSMTP Transaction Log:\n{chr(10).join(smtp_logs)}\n\n---\nMXLab"
+        msg.attach(MIMEText(body_text, 'plain'))
+        smtp_conversation = []
+
+        if SMARTHOST_ENABLED and SMARTHOST_HOST:
+            logs.append(f"[CALLBACK] Using smarthost: {SMARTHOST_HOST}:{SMARTHOST_PORT}")
+            result['smarthost_used'] = True
             try:
-                msg = MIMEMultipart('alternative')
-                msg['From'] = f"callback@{DOMAIN}"
-                msg['To'] = to_email
-                msg['Subject'] = f"[MXLab Callback] Re: {original_subject}"
-                msg['X-MXLab-Callback-ID'] = callback_id
-                body_text = f"MXLab Callback Test Result\n{'='*32}\n\nCallback ID: {callback_id}\nOriginal Subject: {original_subject}\nTested at: {datetime.now().isoformat()}\n\nSMTP Transaction Log:\n{chr(10).join(smtp_logs)}\n\n---\nMXLab"
-                msg.attach(MIMEText(body_text, 'plain'))
-                smtp = smtplib.SMTP(timeout=30)
-                smtp_conversation = []
-                code, resp = smtp.connect(mx_host, 25)
-                smtp_conversation.append(f"CONNECT -> {code}")
-                code, resp = smtp.ehlo(DOMAIN)
-                smtp_conversation.append(f"EHLO -> {code}")
-                if smtp.has_extn('STARTTLS'):
-                    try:
-                        smtp.starttls()
-                        result['tls_used'] = True
-                        smtp.ehlo(DOMAIN)
-                    except:
-                        pass
-                smtp.mail(f"callback@{DOMAIN}")
-                smtp.rcpt(to_email)
-                code, resp = smtp.data(msg.as_bytes())
-                smtp_conversation.append(f"DATA -> {code}")
+                if SMARTHOST_TLS == 'ssl':
+                    smtp = smtplib.SMTP_SSL(SMARTHOST_HOST, SMARTHOST_PORT, timeout=30)
+                    result['tls_used'] = True
+                else:
+                    smtp = smtplib.SMTP(SMARTHOST_HOST, SMARTHOST_PORT, timeout=30)
+                smtp.ehlo(SMTP_HOSTNAME)
+                if SMARTHOST_TLS == 'starttls':
+                    smtp.starttls()
+                    smtp.ehlo(SMTP_HOSTNAME)
+                    result['tls_used'] = True
+                if SMARTHOST_USERNAME and SMARTHOST_PASSWORD:
+                    smtp.login(SMARTHOST_USERNAME, SMARTHOST_PASSWORD)
+                    smtp_conversation.append("AUTH -> OK")
+                smtp.sendmail(from_addr, [to_email], msg.as_bytes())
+                smtp_conversation.append(f"SEND -> OK")
                 smtp.quit()
                 result['success'] = True
                 result['smtp_log'] = smtp_conversation
                 result['sent_at'] = datetime.now().isoformat()
-                result['mx_used'] = mx_host
-                break
+                result['relay_used'] = SMARTHOST_HOST
             except Exception as e:
                 result['error'] = str(e)
-                continue
+        else:
+            domain = to_email.split('@')[1]
+            mx_records = []
+            try:
+                answers = dns.resolver.resolve(domain, 'MX')
+                for rdata in answers:
+                    mx_records.append((rdata.preference, str(rdata.exchange).rstrip('.')))
+                mx_records.sort(key=lambda x: x[0])
+            except:
+                mx_records = [(0, domain)]
+            result['mx_records'] = mx_records
+            for priority, mx_host in mx_records:
+                try:
+                    smtp = smtplib.SMTP(timeout=30)
+                    smtp.connect(mx_host, 25)
+                    smtp.ehlo(SMTP_HOSTNAME)
+                    if smtp.has_extn('STARTTLS'):
+                        try:
+                            smtp.starttls()
+                            smtp.ehlo(SMTP_HOSTNAME)
+                            result['tls_used'] = True
+                        except:
+                            pass
+                    smtp.mail(from_addr)
+                    smtp.rcpt(to_email)
+                    smtp.data(msg.as_bytes())
+                    smtp.quit()
+                    result['success'] = True
+                    result['sent_at'] = datetime.now().isoformat()
+                    result['mx_used'] = mx_host
+                    break
+                except Exception as e:
+                    result['error'] = str(e)
+                    continue
     except Exception as e:
         result['error'] = str(e)
     result['logs'] = logs
@@ -1240,6 +1285,75 @@ def check_server_versions(msg):
         'status': 'pass',
         'message': 'No version information detected in headers'
     }
+
+
+# SAML Authentication (if enabled)
+saml_sessions = {}
+
+if SAML_ENABLED:
+    try:
+        from onelogin.saml2.auth import OneLogin_Saml2_Auth
+        from onelogin.saml2.utils import OneLogin_Saml2_Utils
+        SAML_AVAILABLE = True
+        print(f"[SAML] SSO enabled")
+    except ImportError:
+        SAML_AVAILABLE = False
+        print("[SAML] python3-saml not installed")
+else:
+    SAML_AVAILABLE = False
+
+
+def get_saml_settings():
+    return {
+        "strict": True, "debug": False,
+        "sp": {"entityId": SAML_SP_ENTITY_ID, "assertionConsumerService": {"url": SAML_SP_ACS_URL, "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"}},
+        "idp": {"entityId": SAML_IDP_ENTITY_ID, "singleSignOnService": {"url": SAML_IDP_SSO_URL, "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"}, "x509cert": SAML_IDP_CERT}
+    }
+
+
+@app.route('/saml/login')
+def saml_login():
+    if not SAML_AVAILABLE:
+        return jsonify({'error': 'SAML not configured'}), 400
+    req = {'https': 'on' if request.scheme == 'https' else 'off', 'http_host': request.host, 'script_name': request.path, 'get_data': request.args.copy(), 'post_data': request.form.copy()}
+    auth = OneLogin_Saml2_Auth(req, get_saml_settings())
+    return redirect(auth.login(return_to=request.args.get('return', '/')))
+
+
+@app.route('/saml/acs', methods=['POST'])
+def saml_acs():
+    if not SAML_AVAILABLE:
+        return jsonify({'error': 'SAML not configured'}), 400
+    req = {'https': 'on' if request.scheme == 'https' else 'off', 'http_host': request.host, 'script_name': request.path, 'get_data': request.args.copy(), 'post_data': request.form.copy()}
+    auth = OneLogin_Saml2_Auth(req, get_saml_settings())
+    auth.process_response()
+    if auth.get_errors() or not auth.is_authenticated():
+        return jsonify({'error': 'SAML auth failed'}), 401
+    session_id = uuid.uuid4().hex
+    saml_sessions[session_id] = {'user': auth.get_nameid(), 'expires': (datetime.now() + timedelta(hours=8)).isoformat()}
+    response = redirect(request.form.get('RelayState', '/'))
+    response.set_cookie('mxlab_saml_session', session_id, httponly=True, secure=True)
+    return response
+
+
+@app.route('/saml/logout')
+def saml_logout():
+    session_id = request.cookies.get('mxlab_saml_session')
+    if session_id and session_id in saml_sessions:
+        del saml_sessions[session_id]
+    response = redirect('/')
+    response.delete_cookie('mxlab_saml_session')
+    return response
+
+
+@app.route('/api/auth/status')
+def auth_status():
+    session_id = request.cookies.get('mxlab_saml_session')
+    if session_id and session_id in saml_sessions:
+        s = saml_sessions[session_id]
+        if datetime.fromisoformat(s['expires']) > datetime.now():
+            return jsonify({'authenticated': True, 'user': s['user'], 'method': 'saml'})
+    return jsonify({'authenticated': not SAML_ENABLED, 'saml_enabled': SAML_ENABLED})
 
 
 # Flask Routes

@@ -18,6 +18,18 @@ services:
       - WEB_PORT=5000
       - TLS_ENABLED=true
       - MONGO_URI=mongodb://mongodb:27017/
+      # Smarthost (mail relay) - set in .env
+      - SMARTHOST_ENABLED=${SMARTHOST_ENABLED:-false}
+      - SMARTHOST_HOST=${SMARTHOST_HOST:-}
+      - SMARTHOST_PORT=${SMARTHOST_PORT:-587}
+      - SMARTHOST_USERNAME=${SMARTHOST_USERNAME:-}
+      - SMARTHOST_PASSWORD=${SMARTHOST_PASSWORD:-}
+      - SMARTHOST_TLS=${SMARTHOST_TLS:-starttls}
+      # SAML SSO - set in .env
+      - SAML_ENABLED=${SAML_ENABLED:-false}
+      - SAML_IDP_ENTITY_ID=${SAML_IDP_ENTITY_ID:-}
+      - SAML_IDP_SSO_URL=${SAML_IDP_SSO_URL:-}
+      - SAML_IDP_CERT=${SAML_IDP_CERT:-}
     env_file:
       - .env
     volumes:
