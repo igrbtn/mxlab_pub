@@ -3569,6 +3569,8 @@
 
             // Summary
             const success = data.status === 'completed';
+            const deliveryRequested = data.request_delivery_receipt;
+            const readRequested = data.request_read_receipt;
             summaryEl.innerHTML = `
                 <div class="summary-row">
                     <span class="summary-label">Status</span>
@@ -3589,6 +3591,17 @@
                 ${data.send_result?.smtp_response ? `<div class="summary-row">
                     <span class="summary-label">SMTP Response</span>
                     <span class="summary-value">${escapeHtml(data.send_result.smtp_response)}</span>
+                </div>` : ''}
+                <div class="summary-row">
+                    <span class="summary-label">Delivery Receipt (DSN)</span>
+                    <span class="summary-value">${deliveryRequested ? 'Requested' : 'Not requested'}</span>
+                </div>
+                <div class="summary-row">
+                    <span class="summary-label">Read Receipt (MDN)</span>
+                    <span class="summary-value">${readRequested ? 'Requested' : 'Not requested'}</span>
+                </div>
+                ${(deliveryRequested || readRequested) ? `<div style="margin-top: 12px; padding: 12px; background: #334155; border-radius: 6px; font-size: 0.85rem; color: #94a3b8;">
+                    <strong>Note:</strong> Receipts will be sent to your mail server. Check your inbox for DSN/MDN notifications.
                 </div>` : ''}
             `;
 
