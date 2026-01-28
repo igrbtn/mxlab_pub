@@ -645,6 +645,44 @@ def check_dkim(raw_email, msg):
             'message': 'No DKIM signature found'
         }
 
+    # Parse DKIM signature to extract selector and domain
+    def parse_dkim_sig(sig):
+        result = {}
+        # Normalize: remove line breaks and extra spaces
+        sig = ' '.join(sig.split())
+        for part in sig.split(';'):
+            part = part.strip()
+            if '=' in part:
+                key, value = part.split('=', 1)
+                result[key.strip()] = value.strip()
+        return result
+
+    def diagnose_dkim_dns(selector, domain):
+        """Fetch and validate DKIM DNS record to diagnose issues."""
+        try:
+            dkim_domain = f'{selector}._domainkey.{domain}'
+            resolver = dns.resolver.Resolver()
+            resolver.timeout = 5
+            resolver.lifetime = 5
+            answers = resolver.resolve(dkim_domain, 'TXT')
+            for rdata in answers:
+                raw_parts = [s.decode() if isinstance(s, bytes) else str(s) for s in rdata.strings]
+                raw_txt = ''.join(raw_parts)
+                parsed = parse_dkim_record(raw_txt)
+                validation = validate_dkim_record(raw_txt, parsed)
+                return {
+                    'dns_found': True,
+                    'domain': dkim_domain,
+                    'raw_record': raw_txt[:200] + '...' if len(raw_txt) > 200 else raw_txt,
+                    'validation': validation
+                }
+        except dns.resolver.NXDOMAIN:
+            return {'dns_found': False, 'error': f'No DNS record at {selector}._domainkey.{domain}'}
+        except dns.resolver.NoAnswer:
+            return {'dns_found': False, 'error': f'No TXT record at {selector}._domainkey.{domain}'}
+        except Exception as e:
+            return {'dns_found': False, 'error': str(e)}
+
     if DKIM_AVAILABLE:
         try:
             valid = dkim.verify(raw_email)
@@ -656,11 +694,32 @@ def check_dkim(raw_email, msg):
                     'record': dkim_header[:100] + '...' if len(dkim_header) > 100 else dkim_header
                 }
             else:
+                # Verification failed - diagnose why
+                sig_parts = parse_dkim_sig(dkim_header)
+                selector = sig_parts.get('s', '')
+                domain = sig_parts.get('d', '')
+                diagnosis = None
+                diagnosis_msg = ''
+
+                if selector and domain:
+                    diagnosis = diagnose_dkim_dns(selector, domain)
+                    if diagnosis.get('dns_found'):
+                        validation = diagnosis.get('validation', {})
+                        if validation.get('errors'):
+                            diagnosis_msg = ' | DNS record issues: ' + '; '.join(validation['errors'])
+                        elif validation.get('warnings'):
+                            diagnosis_msg = ' | DNS warnings: ' + '; '.join(validation['warnings'])
+                    else:
+                        diagnosis_msg = f" | {diagnosis.get('error', 'DNS lookup failed')}"
+
                 return {
                     'name': 'DKIM Signature',
                     'status': 'fail',
-                    'message': 'DKIM signature verification failed',
-                    'record': dkim_header[:100] + '...' if len(dkim_header) > 100 else dkim_header
+                    'message': f'DKIM signature verification failed{diagnosis_msg}',
+                    'record': dkim_header[:100] + '...' if len(dkim_header) > 100 else dkim_header,
+                    'selector': selector,
+                    'domain': domain,
+                    'diagnosis': diagnosis
                 }
         except Exception as e:
             return {
@@ -1422,22 +1481,40 @@ def tool_dkim_lookup(query):
         try:
             answers = resolver.resolve(dkim_domain, 'TXT')
             records = []
+            all_validation_errors = []
+            all_validation_warnings = []
+            # Get raw TXT record data (may be multiple strings that need joining)
             for rdata in answers:
-                txt_value = str(rdata).strip('"')
+                # Join multiple TXT strings and preserve raw format for validation
+                raw_parts = [s.decode() if isinstance(s, bytes) else str(s) for s in rdata.strings]
+                raw_txt = ''.join(raw_parts)
+                txt_value = raw_txt.replace('\t', ' ').replace('  ', ' ')  # Normalize for display
                 parsed = parse_dkim_record(txt_value)
+                validation = validate_dkim_record(raw_txt, parsed)
+                all_validation_errors.extend(validation['errors'])
+                all_validation_warnings.extend(validation['warnings'])
                 records.append({
                     'selector': selector,
                     'domain': dkim_domain,
                     'value': txt_value,
+                    'raw_value': raw_txt,
                     'ttl': answers.rrset.ttl,
-                    'parsed': parsed
+                    'parsed': parsed,
+                    'validation': validation
                 })
+            status = 'success'
+            if all_validation_errors:
+                status = 'error'
+            elif all_validation_warnings:
+                status = 'warning'
             return {
                 'tool': 'DKIM Lookup',
                 'query': query,
-                'status': 'success',
+                'status': status,
                 'selectors_found': [selector],
                 'records': records,
+                'validation_errors': all_validation_errors,
+                'validation_warnings': all_validation_warnings,
                 'command': f'dig {dkim_domain} TXT +short'
             }
         except dns.resolver.NXDOMAIN:
@@ -1460,6 +1537,8 @@ def tool_dkim_lookup(query):
     found_records = []
     selectors_found = []
     selectors_checked = []
+    all_validation_errors = []
+    all_validation_warnings = []
 
     for selector in common_selectors:
         dkim_domain = f'{selector}._domainkey.{domain}'
@@ -1467,15 +1546,23 @@ def tool_dkim_lookup(query):
         try:
             answers = resolver.resolve(dkim_domain, 'TXT')
             for rdata in answers:
-                txt_value = str(rdata).strip('"')
+                # Join multiple TXT strings and preserve raw format
+                raw_parts = [s.decode() if isinstance(s, bytes) else str(s) for s in rdata.strings]
+                raw_txt = ''.join(raw_parts)
+                txt_value = raw_txt.replace('\t', ' ').replace('  ', ' ')
                 if 'v=DKIM1' in txt_value or 'k=' in txt_value or 'p=' in txt_value:
                     parsed = parse_dkim_record(txt_value)
+                    validation = validate_dkim_record(raw_txt, parsed)
+                    all_validation_errors.extend([(selector, e) for e in validation['errors']])
+                    all_validation_warnings.extend([(selector, w) for w in validation['warnings']])
                     found_records.append({
                         'selector': selector,
                         'domain': dkim_domain,
                         'value': txt_value,
+                        'raw_value': raw_txt,
                         'ttl': answers.rrset.ttl,
-                        'parsed': parsed
+                        'parsed': parsed,
+                        'validation': validation
                     })
                     selectors_found.append(selector)
                     selectors_checked[-1]['found'] = True
@@ -1483,15 +1570,25 @@ def tool_dkim_lookup(query):
             continue
 
     if found_records:
+        status = 'success'
+        message = f'Found {len(found_records)} DKIM record(s) with selectors: {", ".join(selectors_found)}'
+        if all_validation_errors:
+            status = 'error'
+            message += f' - {len(all_validation_errors)} validation error(s) found'
+        elif all_validation_warnings:
+            status = 'warning'
+            message += f' - {len(all_validation_warnings)} validation warning(s)'
         return {
             'tool': 'DKIM Lookup',
             'query': query,
-            'status': 'success',
+            'status': status,
             'selectors_found': selectors_found,
             'selectors_checked': selectors_checked,
             'records': found_records,
             'count': len(found_records),
-            'message': f'Found {len(found_records)} DKIM record(s) with selectors: {", ".join(selectors_found)}'
+            'validation_errors': [{'selector': s, 'error': e} for s, e in all_validation_errors],
+            'validation_warnings': [{'selector': s, 'warning': w} for s, w in all_validation_warnings],
+            'message': message
         }
     else:
         return {
@@ -1516,6 +1613,92 @@ def parse_dkim_record(dkim_txt):
             key, value = part.split('=', 1)
             parsed[key.strip()] = value.strip()
     return parsed
+
+
+def validate_dkim_record(raw_txt, parsed=None):
+    """Validate DKIM DNS record for common issues that cause verification failures.
+    Returns dict with 'valid': bool, 'warnings': list, 'errors': list, 'details': dict"""
+    warnings = []
+    errors = []
+    details = {}
+
+    if parsed is None:
+        parsed = parse_dkim_record(raw_txt)
+
+    # Check for embedded tabs or unusual whitespace in raw record
+    if '\t' in raw_txt or '\x09' in raw_txt:
+        errors.append('Record contains embedded tabs - this can break DKIM verification')
+        details['has_tabs'] = True
+
+    # Check for multiple spaces (not just single space separators)
+    if '  ' in raw_txt:
+        warnings.append('Record contains multiple consecutive spaces')
+        details['has_multiple_spaces'] = True
+
+    # Check for required v= tag
+    if 'v' not in parsed:
+        warnings.append('Missing v= tag (should be v=DKIM1)')
+    elif parsed.get('v') != 'DKIM1':
+        errors.append(f"Invalid version: {parsed.get('v')} (should be DKIM1)")
+
+    # Check for p= (public key) - required
+    if 'p' not in parsed:
+        errors.append('Missing p= tag (public key)')
+    else:
+        pubkey = parsed['p']
+        details['key_length'] = len(pubkey)
+
+        # Check if key is empty (revoked)
+        if not pubkey or pubkey == '':
+            warnings.append('Empty public key (p=) - key may be revoked')
+            details['key_revoked'] = True
+        else:
+            # Check for whitespace in key (common issue)
+            if ' ' in pubkey or '\t' in pubkey or '\n' in pubkey or '\r' in pubkey:
+                errors.append('Public key contains whitespace - this breaks DKIM verification')
+                details['key_has_whitespace'] = True
+
+            # Check if base64 is valid
+            import re
+            # Valid base64 chars: A-Z, a-z, 0-9, +, /, and = for padding
+            if not re.match(r'^[A-Za-z0-9+/]*={0,2}$', pubkey):
+                errors.append('Public key contains invalid base64 characters')
+                details['key_invalid_base64'] = True
+
+            # Check base64 length (should be multiple of 4)
+            if len(pubkey) % 4 != 0:
+                warnings.append(f'Public key length ({len(pubkey)}) is not a multiple of 4 - may be truncated')
+                details['key_length_invalid'] = True
+
+            # Estimate key size (RSA key in base64)
+            key_bytes = len(pubkey) * 3 // 4
+            if key_bytes < 128:  # Less than 1024 bits
+                warnings.append(f'Public key appears too short ({key_bytes} bytes) - may be truncated or weak')
+            details['estimated_key_bytes'] = key_bytes
+
+    # Check for k= (key type)
+    if 'k' in parsed and parsed['k'] not in ['rsa', 'ed25519']:
+        warnings.append(f"Unusual key type: {parsed['k']} (expected rsa or ed25519)")
+
+    # Check for h= (hash algorithm)
+    if 'h' in parsed and parsed['h'] not in ['sha1', 'sha256']:
+        warnings.append(f"Unusual hash algorithm: {parsed['h']}")
+
+    # Check for t= flags
+    if 't' in parsed:
+        flags = parsed['t'].split(':')
+        if 'y' in flags:
+            warnings.append('Testing mode enabled (t=y) - failures may not be enforced')
+        if 's' in flags:
+            details['strict_mode'] = True
+
+    return {
+        'valid': len(errors) == 0,
+        'warnings': warnings,
+        'errors': errors,
+        'details': details,
+        'parsed': parsed
+    }
 
 
 def tool_dmarc_lookup(domain):
