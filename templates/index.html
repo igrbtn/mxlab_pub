@@ -1594,6 +1594,11 @@
                     </div>
 
                     <div class="form-group">
+                        <label for="exchLogin">Login (if different from email)</label>
+                        <input type="text" id="exchLogin" class="tools-input" placeholder="DOMAIN\\username or username (optional)">
+                    </div>
+
+                    <div class="form-group">
                         <label for="exchPassword">Password</label>
                         <input type="password" id="exchPassword" class="tools-input" placeholder="Enter password">
                     </div>
@@ -2883,6 +2888,7 @@
 
         async function runExchangeTest() {
             const email = document.getElementById('exchEmail').value.trim();
+            const login = document.getElementById('exchLogin').value.trim() || email; // Use email if login not specified
             const password = document.getElementById('exchPassword').value;
             const useAutodiscover = document.querySelector('input[name="serverMode"]:checked').value === 'autodiscover';
             const manualServer = document.getElementById('exchServer').value.trim();
@@ -2922,6 +2928,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         email: email,
+                        login: login,
                         password: password,
                         use_autodiscover: useAutodiscover,
                         manual_server: manualServer,

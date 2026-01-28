@@ -1975,14 +1975,18 @@ def parse_exchange_version(banner):
     # Exchange version build number to CU mapping
     exchange_versions = {
         '15.2': {
-            '1544': ('Exchange 2019', 'CU14'), '1258': ('Exchange 2019', 'CU13'),
-            '1118': ('Exchange 2019', 'CU12'), '986': ('Exchange 2019', 'CU11'),
-            '922': ('Exchange 2019', 'CU10'), '858': ('Exchange 2019', 'CU9'),
-            '792': ('Exchange 2019', 'CU8'), '721': ('Exchange 2019', 'CU7'),
-            '659': ('Exchange 2019', 'CU6'), '595': ('Exchange 2019', 'CU5'),
-            '529': ('Exchange 2019', 'CU4'), '464': ('Exchange 2019', 'CU3'),
-            '397': ('Exchange 2019', 'CU2'), '330': ('Exchange 2019', 'CU1'),
-            '196': ('Exchange 2019', 'RTM'),
+            # Exchange SE (Subscription Edition)
+            '1958': ('Exchange SE', 'CU2'), '1913': ('Exchange SE', 'CU1'),
+            '1774': ('Exchange SE', 'RTM'),
+            # Exchange 2019
+            '1706': ('Exchange 2019', 'CU15'), '1544': ('Exchange 2019', 'CU14'),
+            '1258': ('Exchange 2019', 'CU13'), '1118': ('Exchange 2019', 'CU12'),
+            '986': ('Exchange 2019', 'CU11'), '922': ('Exchange 2019', 'CU10'),
+            '858': ('Exchange 2019', 'CU9'), '792': ('Exchange 2019', 'CU8'),
+            '721': ('Exchange 2019', 'CU7'), '659': ('Exchange 2019', 'CU6'),
+            '595': ('Exchange 2019', 'CU5'), '529': ('Exchange 2019', 'CU4'),
+            '464': ('Exchange 2019', 'CU3'), '397': ('Exchange 2019', 'CU2'),
+            '330': ('Exchange 2019', 'CU1'), '196': ('Exchange 2019', 'RTM'),
         },
         '15.1': {
             '2507': ('Exchange 2016', 'CU23'), '2375': ('Exchange 2016', 'CU22'),
@@ -2682,13 +2686,15 @@ def parse_autodiscover_xml(xml_content):
         return {'error': str(e)}
 
 
-def test_exchange_autodiscover(email, password, manual_server=None):
+def test_exchange_autodiscover(email, password, login=None, manual_server=None):
     """Test Autodiscover connectivity for Exchange/Office 365."""
     domain = email.split('@')[1] if '@' in email else email
+    auth_login = login if login else email
     steps = []
     autodiscover_xml = None
     autodiscover_parsed = None
     autodiscover_url = None
+    auth_failed = False
 
     # DNS SRV lookup
     step = {'name': 'DNS SRV Lookup', 'test': 'autodiscover', 'status': 'error', 'response_time_ms': 0, 'message': ''}
@@ -2724,34 +2730,59 @@ def test_exchange_autodiscover(email, password, manual_server=None):
         step = {'name': 'Autodiscover Request', 'test': 'autodiscover', 'status': 'error', 'response_time_ms': 0, 'message': '', 'details': {'url': url}}
         start_time = datetime.now()
         try:
-            auth = HTTPBasicAuth(email, password)
-            response = requests.post(url, data=autodiscover_request, auth=auth, headers={'Content-Type': 'text/xml'}, timeout=15, verify=True)
-            step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
-            step['details']['status_code'] = response.status_code
+            # Try without auth first (non-Microsoft autodiscover)
+            response = requests.post(url, data=autodiscover_request, headers={'Content-Type': 'text/xml'}, timeout=15, verify=True)
             if response.status_code == 200:
                 step['status'] = 'success'
-                step['message'] = f'Autodiscover response received ({response.status_code})'
+                step['message'] = 'Autodiscover response received (no auth required)'
+                step['details']['auth_type'] = 'None'
                 autodiscover_xml = response.text
                 autodiscover_url = url
                 autodiscover_parsed = parse_autodiscover_xml(autodiscover_xml)
+                step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
                 steps.append(step)
                 break
-            elif response.status_code == 401:
-                if NTLM_AVAILABLE:
+            # Try Basic auth
+            if response.status_code in [401, 403]:
+                auth = HTTPBasicAuth(auth_login, password)
+                response = requests.post(url, data=autodiscover_request, auth=auth, headers={'Content-Type': 'text/xml'}, timeout=15, verify=True)
+                step['details']['status_code'] = response.status_code
+                if response.status_code == 200:
+                    step['status'] = 'success'
+                    step['message'] = 'Autodiscover response received (Basic auth)'
+                    step['details']['auth_type'] = 'Basic'
+                    autodiscover_xml = response.text
+                    autodiscover_url = url
+                    autodiscover_parsed = parse_autodiscover_xml(autodiscover_xml)
+                    step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
+                    steps.append(step)
+                    break
+                elif response.status_code == 401 and NTLM_AVAILABLE:
                     try:
-                        ntlm_auth = HttpNtlmAuth(email, password)
+                        ntlm_auth = HttpNtlmAuth(auth_login, password)
                         response = requests.post(url, data=autodiscover_request, auth=ntlm_auth, headers={'Content-Type': 'text/xml'}, timeout=15, verify=True)
                         if response.status_code == 200:
                             step['status'] = 'success'
                             step['message'] = 'Autodiscover response received (NTLM auth)'
+                            step['details']['auth_type'] = 'NTLM'
                             autodiscover_xml = response.text
                             autodiscover_url = url
                             autodiscover_parsed = parse_autodiscover_xml(autodiscover_xml)
+                            step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
                             steps.append(step)
                             break
-                    except: pass
-                step['status'] = 'error'
-                step['message'] = 'Authentication failed (401)'
+                        elif response.status_code == 401:
+                            auth_failed = True
+                            step['status'] = 'error'
+                            step['message'] = 'Authentication failed - check credentials'
+                    except:
+                        auth_failed = True
+                        step['status'] = 'error'
+                        step['message'] = 'Authentication failed (NTLM error)'
+                else:
+                    auth_failed = True
+                    step['status'] = 'error'
+                    step['message'] = 'Authentication failed (401)'
             else:
                 step['status'] = 'error'
                 step['message'] = f'HTTP {response.status_code}'
@@ -2766,14 +2797,16 @@ def test_exchange_autodiscover(email, password, manual_server=None):
             step['message'] = str(e)[:50]
         step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
         steps.append(step)
+        if auth_failed: break  # Stop to prevent lockout
 
     return {'test': 'autodiscover', 'status': 'success' if autodiscover_xml else 'error', 'steps': steps,
             'autodiscover_url': autodiscover_url, 'autodiscover_xml': autodiscover_xml, 'autodiscover_parsed': autodiscover_parsed,
-            'message': 'Autodiscover successful' if autodiscover_xml else 'Autodiscover failed'}
+            'auth_failed': auth_failed, 'message': 'Autodiscover successful' if autodiscover_xml else ('Authentication failed' if auth_failed else 'Autodiscover failed')}
 
 
-def test_exchange_ews(email, password, autodiscover_result):
+def test_exchange_ews(email, password, autodiscover_result, login=None):
     """Test Exchange Web Services connectivity."""
+    auth_login = login if login else email
     ews_url = 'https://outlook.office365.com/EWS/Exchange.asmx'
     if autodiscover_result and autodiscover_result.get('autodiscover_parsed'):
         for proto_data in autodiscover_result['autodiscover_parsed'].get('protocols', {}).values():
@@ -2783,7 +2816,7 @@ def test_exchange_ews(email, password, autodiscover_result):
     ews_request = '''<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"><soap:Body><GetFolder xmlns="http://schemas.microsoft.com/exchange/services/2006/messages"><FolderShape><t:BaseShape>Default</t:BaseShape></FolderShape><FolderIds><t:DistinguishedFolderId Id="inbox"/></FolderIds></GetFolder></soap:Body></soap:Envelope>'''
     start_time = datetime.now()
     try:
-        response = requests.post(ews_url, data=ews_request, auth=HTTPBasicAuth(email, password),
+        response = requests.post(ews_url, data=ews_request, auth=HTTPBasicAuth(auth_login, password),
                                  headers={'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '"http://schemas.microsoft.com/exchange/services/2006/messages/GetFolder"'}, timeout=15, verify=True)
         step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
         step['details']['status_code'] = response.status_code
@@ -2802,13 +2835,14 @@ def test_exchange_ews(email, password, autodiscover_result):
     return {'test': 'ews', 'status': step['status'], 'steps': [step], 'message': step['message']}
 
 
-def test_exchange_activesync(email, password, autodiscover_result):
+def test_exchange_activesync(email, password, autodiscover_result, login=None):
     """Test Exchange ActiveSync connectivity."""
+    auth_login = login if login else email
     as_url = 'https://outlook.office365.com/Microsoft-Server-ActiveSync'
     step = {'name': 'ActiveSync OPTIONS', 'test': 'activesync', 'status': 'error', 'response_time_ms': 0, 'message': '', 'details': {'url': as_url}}
     start_time = datetime.now()
     try:
-        response = requests.options(as_url, auth=HTTPBasicAuth(email, password), timeout=15, verify=True)
+        response = requests.options(as_url, auth=HTTPBasicAuth(auth_login, password), timeout=15, verify=True)
         step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
         step['details']['status_code'] = response.status_code
         ms_server = response.headers.get('MS-Server-ActiveSync', '')
@@ -2827,13 +2861,14 @@ def test_exchange_activesync(email, password, autodiscover_result):
     return {'test': 'activesync', 'status': step['status'], 'steps': [step], 'message': step['message']}
 
 
-def test_exchange_mapi_http(email, password, autodiscover_result):
+def test_exchange_mapi_http(email, password, autodiscover_result, login=None):
     """Test MAPI over HTTP connectivity."""
+    auth_login = login if login else email
     mapi_url = 'https://outlook.office365.com/mapi/emsmdb/'
     step = {'name': 'MAPI-HTTP Connect', 'test': 'mapi_http', 'status': 'error', 'response_time_ms': 0, 'message': '', 'details': {'url': mapi_url}}
     start_time = datetime.now()
     try:
-        response = requests.post(mapi_url, auth=HTTPBasicAuth(email, password), headers={'Content-Type': 'application/mapi-http', 'X-RequestType': 'Connect'}, timeout=15, verify=True)
+        response = requests.post(mapi_url, auth=HTTPBasicAuth(auth_login, password), headers={'Content-Type': 'application/mapi-http', 'X-RequestType': 'Connect'}, timeout=15, verify=True)
         step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
         step['details']['status_code'] = response.status_code
         if response.status_code == 200:
@@ -2851,15 +2886,16 @@ def test_exchange_mapi_http(email, password, autodiscover_result):
     return {'test': 'mapi_http', 'status': step['status'], 'steps': [step], 'message': step['message']}
 
 
-def test_exchange_availability(email, password, autodiscover_result):
+def test_exchange_availability(email, password, autodiscover_result, login=None):
     """Test Exchange Availability Service."""
+    auth_login = login if login else email
     ews_url = 'https://outlook.office365.com/EWS/Exchange.asmx'
     step = {'name': 'Availability Service', 'test': 'availability', 'status': 'error', 'response_time_ms': 0, 'message': '', 'details': {'url': ews_url}}
     now = datetime.utcnow()
     availability_request = f'''<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"><soap:Body><GetUserAvailabilityRequest xmlns="http://schemas.microsoft.com/exchange/services/2006/messages"><t:TimeZone><t:Bias>0</t:Bias></t:TimeZone><MailboxDataArray><t:MailboxData><t:Email><t:Address>{email}</t:Address></t:Email><t:AttendeeType>Required</t:AttendeeType></t:MailboxData></MailboxDataArray><t:FreeBusyViewOptions><t:TimeWindow><t:StartTime>{now.strftime('%Y-%m-%dT00:00:00')}</t:StartTime><t:EndTime>{(now + timedelta(days=1)).strftime('%Y-%m-%dT00:00:00')}</t:EndTime></t:TimeWindow><t:RequestedView>FreeBusy</t:RequestedView></t:FreeBusyViewOptions></GetUserAvailabilityRequest></soap:Body></soap:Envelope>'''
     start_time = datetime.now()
     try:
-        response = requests.post(ews_url, data=availability_request, auth=HTTPBasicAuth(email, password),
+        response = requests.post(ews_url, data=availability_request, auth=HTTPBasicAuth(auth_login, password),
                                  headers={'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '"http://schemas.microsoft.com/exchange/services/2006/messages/GetUserAvailability"'}, timeout=15, verify=True)
         step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
         step['details']['status_code'] = response.status_code
@@ -2899,6 +2935,7 @@ def exchange_test_stream():
     from flask import Response
     data = request.get_json() or {}
     email = data.get('email', '').strip()
+    login = data.get('login', '').strip() or None
     password = data.get('password', '')
     use_autodiscover = data.get('use_autodiscover', True)
     manual_server = data.get('manual_server', '').strip() if not use_autodiscover else None
@@ -2925,21 +2962,29 @@ def exchange_test_stream():
         all_steps = []
         autodiscover_result = None
 
+        auth_failed = False
         if 'autodiscover' in tests_to_run:
-            autodiscover_result = test_exchange_autodiscover(email, password, manual_server)
+            autodiscover_result = test_exchange_autodiscover(email, password, login, manual_server)
             all_results['autodiscover'] = autodiscover_result
             for step in autodiscover_result.get('steps', []):
                 yield send_event('step', step)
                 all_steps.append(step)
             if autodiscover_result.get('autodiscover_xml'):
                 yield send_event('autodiscover_xml', {'parsed': autodiscover_result.get('autodiscover_parsed'), 'raw': autodiscover_result.get('autodiscover_xml')})
+            if autodiscover_result.get('auth_failed'):
+                auth_failed = True
+                yield send_event('auth_failed', {'message': 'Authentication failed. Skipping remaining tests to prevent account lockout.'})
 
         test_functions = {'ews': test_exchange_ews, 'activesync': test_exchange_activesync, 'mapi_http': test_exchange_mapi_http, 'availability': test_exchange_availability}
         for test_name in tests_to_run:
             if test_name == 'autodiscover': continue
+            if auth_failed:
+                all_results[test_name] = {'steps': [{'name': f'{test_name.upper()} Test', 'status': 'skipped', 'message': 'Skipped due to authentication failure'}]}
+                yield send_event('step', {'name': f'{test_name.upper()} Test', 'status': 'skipped', 'message': 'Skipped due to authentication failure'})
+                continue
             func = test_functions.get(test_name)
             if func:
-                result = func(email, password, autodiscover_result)
+                result = func(email, password, autodiscover_result, login=login)
                 all_results[test_name] = result
                 for step in result.get('steps', []):
                     yield send_event('step', step)
