@@ -150,6 +150,11 @@ SMTP_PORT = int(os.environ.get('SMTP_PORT', 25))
 WEB_PORT = int(os.environ.get('WEB_PORT', 5000))
 DOMAIN = os.environ.get('DOMAIN', 'localhost')
 
+# Allowed domains for receiving emails (comma-separated, defaults to DOMAIN)
+# This prevents the SMTP server from being an open relay
+ALLOWED_DOMAINS_ENV = os.environ.get('ALLOWED_DOMAINS', DOMAIN)
+ALLOWED_DOMAINS = set(d.strip().lower() for d in ALLOWED_DOMAINS_ENV.split(',') if d.strip())
+
 # Telegram notification configuration (optional - set via environment variables)
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
@@ -396,13 +401,20 @@ class MailHandler:
     """Handle incoming emails."""
 
     async def handle_RCPT(self, server, session, envelope, address, rcpt_options):
-        """Validate recipient address."""
-        # Extract test_id from email address (format: test_id@domain)
-        local_part = address.split('@')[0]
-        if local_part in test_addresses:
-            envelope.rcpt_tos.append(address)
-            return '250 OK'
-        # Accept all emails for testing purposes
+        """Validate recipient address - only accept mail for configured domains."""
+        # Parse the recipient address
+        if '@' not in address:
+            return '550 Invalid address format'
+
+        local_part, domain = address.rsplit('@', 1)
+        domain = domain.lower().rstrip('>')
+
+        # Security: Only accept emails for allowed domains (prevents open relay)
+        if domain not in ALLOWED_DOMAINS:
+            log('warning', f'Rejected relay attempt: {address} (domain {domain} not in allowed list)')
+            return '550 Relay not permitted - domain not configured'
+
+        # Accept the recipient
         envelope.rcpt_tos.append(address)
         return '250 OK'
 
@@ -3249,6 +3261,8 @@ def run_smtp_server():
     controller = Controller(handler, hostname='0.0.0.0', port=SMTP_PORT, data_size_limit=1048576)
     controller.start()
     print(f"[SMTP] Server running on port {SMTP_PORT} (max message size: 1MB)")
+    print(f"[SMTP] Accepting mail for domains: {', '.join(sorted(ALLOWED_DOMAINS))}")
+    print(f"[SMTP] Relay protection: ENABLED (non-configured domains will be rejected)")
     return controller
 
 
