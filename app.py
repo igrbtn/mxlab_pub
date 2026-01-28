@@ -411,8 +411,8 @@ class MailHandler:
 
         # Security: Only accept emails for allowed domains (prevents open relay)
         if domain not in ALLOWED_DOMAINS:
-            log('warning', f'Rejected relay attempt: {address} (domain {domain} not in allowed list)')
-            return '550 Relay not permitted - domain not configured'
+            print(f'[SMTP] Relay rejected: {address} (domain {domain} not allowed)')
+            return '550 Relay is prohibited'
 
         # Accept the recipient
         envelope.rcpt_tos.append(address)
