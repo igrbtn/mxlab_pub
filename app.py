@@ -150,6 +150,9 @@ SMTP_PORT = int(os.environ.get('SMTP_PORT', 25))
 WEB_PORT = int(os.environ.get('WEB_PORT', 5000))
 DOMAIN = os.environ.get('DOMAIN', 'localhost')
 
+# SMTP Server hostname (shown in EHLO greeting)
+SMTP_HOSTNAME = os.environ.get('SMTP_HOSTNAME', DOMAIN)
+
 # TLS Certificate paths
 TLS_CERT_PATH = os.environ.get('TLS_CERT_PATH', '/app/certs/cert.pem')
 TLS_KEY_PATH = os.environ.get('TLS_KEY_PATH', '/app/certs/key.pem')
@@ -3813,9 +3816,10 @@ def run_smtp_server():
     handler = MailHandler()
     ssl_context = get_ssl_context() if TLS_ENABLED else None
     controller = Controller(handler, hostname='0.0.0.0', port=SMTP_PORT, data_size_limit=1048576,
-                           tls_context=ssl_context, require_starttls=False)
+                           tls_context=ssl_context, require_starttls=False,
+                           ident=f'{SMTP_HOSTNAME} ESMTP MXLab')
     controller.start()
-    print(f"[SMTP] Server running on port {SMTP_PORT} (max message size: 1MB)")
+    print(f"[SMTP] Server running on port {SMTP_PORT} as {SMTP_HOSTNAME}")
     print(f"[SMTP] STARTTLS: {'ENABLED' if ssl_context else 'DISABLED'}")
     print(f"[SMTP] Accepting mail for domains: {', '.join(sorted(ALLOWED_DOMAINS))}")
     print(f"[SMTP] Rate limits: {RATE_LIMIT_PER_IP}/min per IP, {RATE_LIMIT_PER_EMAIL}/min per sender")

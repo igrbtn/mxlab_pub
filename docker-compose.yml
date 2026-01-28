@@ -13,11 +13,15 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DOMAIN=${DOMAIN:-localhost}
+      - SMTP_HOSTNAME=${SMTP_HOSTNAME:-${DOMAIN:-localhost}}
       - SMTP_PORT=25
       - WEB_PORT=5000
+      - TLS_ENABLED=true
       - MONGO_URI=mongodb://mongodb:27017/
     env_file:
       - .env
+    volumes:
+      - certs_data:/app/certs
 
   mongodb:
     image: mongo:7
@@ -30,3 +34,4 @@ services:
 
 volumes:
   mongodb_data:
+  certs_data:
