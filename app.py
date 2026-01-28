@@ -150,10 +150,159 @@ SMTP_PORT = int(os.environ.get('SMTP_PORT', 25))
 WEB_PORT = int(os.environ.get('WEB_PORT', 5000))
 DOMAIN = os.environ.get('DOMAIN', 'localhost')
 
+# TLS Certificate paths
+TLS_CERT_PATH = os.environ.get('TLS_CERT_PATH', '/app/certs/cert.pem')
+TLS_KEY_PATH = os.environ.get('TLS_KEY_PATH', '/app/certs/key.pem')
+TLS_ENABLED = os.environ.get('TLS_ENABLED', 'true').lower() == 'true'
+
+# Rate limiting configuration (emails per minute)
+RATE_LIMIT_PER_IP = int(os.environ.get('RATE_LIMIT_PER_IP', 5))
+RATE_LIMIT_PER_EMAIL = int(os.environ.get('RATE_LIMIT_PER_EMAIL', 2))
+RATE_LIMIT_PER_DOMAIN = int(os.environ.get('RATE_LIMIT_PER_DOMAIN', 10))
+RATE_LIMIT_WINDOW = 60  # seconds
+
+# Rate limiting storage
+rate_limit_store = {
+    'by_ip': defaultdict(list),
+    'by_email': defaultdict(list),
+    'by_domain': defaultdict(list),
+}
+
+# Callback test storage
+callback_tests = {}
+
 # Allowed domains for receiving emails (comma-separated, defaults to DOMAIN)
 # This prevents the SMTP server from being an open relay
 ALLOWED_DOMAINS_ENV = os.environ.get('ALLOWED_DOMAINS', DOMAIN)
 ALLOWED_DOMAINS = set(d.strip().lower() for d in ALLOWED_DOMAINS_ENV.split(',') if d.strip())
+
+
+def generate_tls_certificate():
+    """Generate a self-signed TLS certificate for SMTP STARTTLS."""
+    import subprocess
+    cert_dir = os.path.dirname(TLS_CERT_PATH)
+    if cert_dir and not os.path.exists(cert_dir):
+        os.makedirs(cert_dir, exist_ok=True)
+    if os.path.exists(TLS_CERT_PATH) and os.path.exists(TLS_KEY_PATH):
+        print(f"[TLS] Using existing certificate: {TLS_CERT_PATH}")
+        return True
+    try:
+        cmd = ['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-keyout', TLS_KEY_PATH, '-out', TLS_CERT_PATH,
+               '-days', '365', '-nodes', '-subj', f'/CN={DOMAIN}/O=MXLab/C=US']
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"[TLS] Generated self-signed certificate for {DOMAIN}")
+            return True
+        print(f"[TLS] Failed to generate certificate: {result.stderr}")
+        return False
+    except Exception as e:
+        print(f"[TLS] Error generating certificate: {e}")
+        return False
+
+
+def get_ssl_context():
+    """Create SSL context for SMTP STARTTLS."""
+    if not TLS_ENABLED:
+        return None
+    if not os.path.exists(TLS_CERT_PATH) or not os.path.exists(TLS_KEY_PATH):
+        if not generate_tls_certificate():
+            return None
+    try:
+        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        context.load_cert_chain(TLS_CERT_PATH, TLS_KEY_PATH)
+        return context
+    except Exception as e:
+        print(f"[TLS] Failed to create SSL context: {e}")
+        return None
+
+
+def check_rate_limit(ip, email, domain):
+    """Check if request exceeds rate limits."""
+    now = datetime.now()
+    window_start = now - timedelta(seconds=RATE_LIMIT_WINDOW)
+    rate_limit_store['by_ip'][ip] = [t for t in rate_limit_store['by_ip'][ip] if t > window_start]
+    if len(rate_limit_store['by_ip'][ip]) >= RATE_LIMIT_PER_IP:
+        return False, f'Rate limit exceeded: max {RATE_LIMIT_PER_IP} emails/min per IP'
+    rate_limit_store['by_email'][email] = [t for t in rate_limit_store['by_email'][email] if t > window_start]
+    if len(rate_limit_store['by_email'][email]) >= RATE_LIMIT_PER_EMAIL:
+        return False, f'Rate limit exceeded: max {RATE_LIMIT_PER_EMAIL} emails/min per sender'
+    rate_limit_store['by_domain'][domain] = [t for t in rate_limit_store['by_domain'][domain] if t > window_start]
+    if len(rate_limit_store['by_domain'][domain]) >= RATE_LIMIT_PER_DOMAIN:
+        return False, f'Rate limit exceeded: max {RATE_LIMIT_PER_DOMAIN} emails/min per domain'
+    return True, None
+
+
+def record_rate_limit(ip, email, domain):
+    """Record a successful email for rate limiting."""
+    now = datetime.now()
+    rate_limit_store['by_ip'][ip].append(now)
+    rate_limit_store['by_email'][email].append(now)
+    rate_limit_store['by_domain'][domain].append(now)
+
+
+def generate_callback_id():
+    """Generate unique callback test ID."""
+    return f"cb_{uuid.uuid4().hex[:10]}"
+
+
+def send_callback_email(to_email, callback_id, original_subject, smtp_logs):
+    """Send callback email back to the sender with SMTP transaction logs."""
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    logs = []
+    result = {'success': False, 'smtp_log': [], 'error': None, 'tls_used': False, 'sent_at': None}
+    try:
+        domain = to_email.split('@')[1]
+        logs.append(f"[CALLBACK] Starting callback to {to_email}")
+        mx_records = []
+        try:
+            answers = dns.resolver.resolve(domain, 'MX')
+            for rdata in answers:
+                mx_records.append((rdata.preference, str(rdata.exchange).rstrip('.')))
+            mx_records.sort(key=lambda x: x[0])
+        except:
+            mx_records = [(0, domain)]
+        result['mx_records'] = mx_records
+        for priority, mx_host in mx_records:
+            try:
+                msg = MIMEMultipart('alternative')
+                msg['From'] = f"callback@{DOMAIN}"
+                msg['To'] = to_email
+                msg['Subject'] = f"[MXLab Callback] Re: {original_subject}"
+                msg['X-MXLab-Callback-ID'] = callback_id
+                body_text = f"MXLab Callback Test Result\n{'='*32}\n\nCallback ID: {callback_id}\nOriginal Subject: {original_subject}\nTested at: {datetime.now().isoformat()}\n\nSMTP Transaction Log:\n{chr(10).join(smtp_logs)}\n\n---\nMXLab"
+                msg.attach(MIMEText(body_text, 'plain'))
+                smtp = smtplib.SMTP(timeout=30)
+                smtp_conversation = []
+                code, resp = smtp.connect(mx_host, 25)
+                smtp_conversation.append(f"CONNECT -> {code}")
+                code, resp = smtp.ehlo(DOMAIN)
+                smtp_conversation.append(f"EHLO -> {code}")
+                if smtp.has_extn('STARTTLS'):
+                    try:
+                        smtp.starttls()
+                        result['tls_used'] = True
+                        smtp.ehlo(DOMAIN)
+                    except:
+                        pass
+                smtp.mail(f"callback@{DOMAIN}")
+                smtp.rcpt(to_email)
+                code, resp = smtp.data(msg.as_bytes())
+                smtp_conversation.append(f"DATA -> {code}")
+                smtp.quit()
+                result['success'] = True
+                result['smtp_log'] = smtp_conversation
+                result['sent_at'] = datetime.now().isoformat()
+                result['mx_used'] = mx_host
+                break
+            except Exception as e:
+                result['error'] = str(e)
+                continue
+    except Exception as e:
+        result['error'] = str(e)
+    result['logs'] = logs
+    return result
+
 
 # Telegram notification configuration (optional - set via environment variables)
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
@@ -420,6 +569,18 @@ class MailHandler:
 
     async def handle_DATA(self, server, session, envelope):
         """Process received email."""
+        # Rate limiting check
+        sender_ip = session.peer[0] if session.peer else 'unknown'
+        sender_email = envelope.mail_from or 'unknown'
+        sender_domain = sender_email.split('@')[1] if '@' in sender_email else 'unknown'
+
+        allowed, reason = check_rate_limit(sender_ip, sender_email, sender_domain)
+        if not allowed:
+            print(f'[SMTP] Rate limit: {reason} from {sender_ip}')
+            return f'451 {reason}'
+
+        record_rate_limit(sender_ip, sender_email, sender_domain)
+
         test_id = None
 
         # Extract test_id from recipient
@@ -498,6 +659,35 @@ class MailHandler:
 
         # Send async Telegram notification (non-blocking)
         asyncio.create_task(send_telegram_notification(test_id, email_data, analysis))
+
+        # Check if this is a callback test - send email back to sender
+        if test_id.startswith('cb_') and envelope.mail_from:
+            callback_id = test_id
+            smtp_receive_logs = [
+                f"CONNECT from {session.peer}",
+                f"MAIL FROM: {envelope.mail_from}",
+                f"RCPT TO: {', '.join(envelope.rcpt_tos)}",
+                f"DATA received ({len(envelope.content)} bytes)",
+                f"Accepted at {datetime.now().isoformat()}"
+            ]
+            if callback_id in callback_tests:
+                callback_tests[callback_id]['status'] = 'received'
+                callback_tests[callback_id]['receive_logs'] = smtp_receive_logs
+                callback_tests[callback_id]['received_at'] = datetime.now().isoformat()
+
+            def send_callback_async():
+                try:
+                    result = send_callback_email(envelope.mail_from, callback_id, email_data.get('subject', ''), smtp_receive_logs)
+                    if callback_id in callback_tests:
+                        callback_tests[callback_id]['status'] = 'completed' if result['success'] else 'send_failed'
+                        callback_tests[callback_id]['send_result'] = result
+                except Exception as e:
+                    if callback_id in callback_tests:
+                        callback_tests[callback_id]['status'] = 'error'
+                        callback_tests[callback_id]['error'] = str(e)
+
+            Thread(target=send_callback_async, daemon=True).start()
+            print(f"[SMTP] Callback test {callback_id} - will respond to {envelope.mail_from}")
 
         return '250 Message accepted for delivery'
 
@@ -1095,6 +1285,54 @@ def get_results(test_id):
     if test_id in emails_store:
         return jsonify(emails_store[test_id])
     return jsonify({'error': 'Not found'}), 404
+
+
+@app.route('/api/callback/generate', methods=['POST'])
+def generate_callback_test():
+    """Generate a callback test email address."""
+    callback_id = generate_callback_id()
+    hostname = get_hostname()
+    email = f"{callback_id}@{hostname}"
+    callback_tests[callback_id] = {
+        'id': callback_id, 'email': email, 'status': 'waiting',
+        'created_at': datetime.now().isoformat(),
+        'expires_at': (datetime.now() + timedelta(hours=1)).isoformat(),
+        'receive_logs': [], 'send_result': None, 'error': None
+    }
+    test_addresses[callback_id] = {
+        'email': email, 'created': datetime.now().isoformat(),
+        'expires': (datetime.now() + timedelta(hours=1)).isoformat(), 'is_callback': True
+    }
+    return jsonify({
+        'callback_id': callback_id, 'email': email, 'smtp_port': SMTP_PORT, 'tls_enabled': TLS_ENABLED,
+        'instructions': f'Send an email to {email}. Server will respond back.',
+        'check_url': f'/api/callback/status/{callback_id}'
+    })
+
+
+@app.route('/api/callback/status/<callback_id>')
+def get_callback_status(callback_id):
+    """Get status of a callback test."""
+    if callback_id not in callback_tests:
+        return jsonify({'error': 'Callback test not found'}), 404
+    return jsonify(callback_tests[callback_id])
+
+
+@app.route('/api/callback/list')
+def list_callback_tests():
+    """List recent callback tests."""
+    tests = sorted(callback_tests.values(), key=lambda x: x.get('created_at', ''), reverse=True)
+    return jsonify({'count': len(tests), 'tests': tests[:20]})
+
+
+@app.route('/api/smtp/status')
+def smtp_status():
+    """Get SMTP server status."""
+    return jsonify({
+        'port': SMTP_PORT, 'tls_enabled': TLS_ENABLED,
+        'allowed_domains': list(ALLOWED_DOMAINS),
+        'rate_limits': {'per_ip': RATE_LIMIT_PER_IP, 'per_email': RATE_LIMIT_PER_EMAIL, 'per_domain': RATE_LIMIT_PER_DOMAIN}
+    })
 
 
 @app.route('/report/<test_id>')
@@ -3571,14 +3809,16 @@ def full_domain_report():
 
 
 def run_smtp_server():
-    """Run the SMTP server in a separate thread."""
+    """Run the SMTP server in a separate thread with optional TLS support."""
     handler = MailHandler()
-    # Max message size 1MB (1048576 bytes)
-    controller = Controller(handler, hostname='0.0.0.0', port=SMTP_PORT, data_size_limit=1048576)
+    ssl_context = get_ssl_context() if TLS_ENABLED else None
+    controller = Controller(handler, hostname='0.0.0.0', port=SMTP_PORT, data_size_limit=1048576,
+                           tls_context=ssl_context, require_starttls=False)
     controller.start()
     print(f"[SMTP] Server running on port {SMTP_PORT} (max message size: 1MB)")
+    print(f"[SMTP] STARTTLS: {'ENABLED' if ssl_context else 'DISABLED'}")
     print(f"[SMTP] Accepting mail for domains: {', '.join(sorted(ALLOWED_DOMAINS))}")
-    print(f"[SMTP] Relay protection: ENABLED (non-configured domains will be rejected)")
+    print(f"[SMTP] Rate limits: {RATE_LIMIT_PER_IP}/min per IP, {RATE_LIMIT_PER_EMAIL}/min per sender")
     return controller
 
 
@@ -3587,16 +3827,18 @@ if __name__ == '__main__':
     print("  Mail Tester - Email Deliverability Analyzer")
     print("=" * 50)
 
-    # Start SMTP server
+    if TLS_ENABLED:
+        generate_tls_certificate()
+
     smtp_controller = run_smtp_server()
 
-    # Start Flask web server
     print(f"[WEB] Server running on http://localhost:{WEB_PORT}")
     print(f"\nUsage:")
     print(f"  1. Open http://localhost:{WEB_PORT} in your browser")
     print(f"  2. Generate a test email address")
     print(f"  3. Send an email to the generated address via SMTP port {SMTP_PORT}")
     print(f"  4. View the analysis results")
+    print(f"\nCallback Test: POST /api/callback/generate")
     print("=" * 50)
 
     try:
