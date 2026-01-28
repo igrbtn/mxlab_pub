@@ -276,31 +276,55 @@ def send_callback_email(to_email, callback_id, original_subject, smtp_logs):
         smtp_conversation = []
 
         if SMARTHOST_ENABLED and SMARTHOST_HOST:
-            logs.append(f"[CALLBACK] Using smarthost: {SMARTHOST_HOST}:{SMARTHOST_PORT}")
+            logs.append(f"[CALLBACK] Using smarthost: {SMARTHOST_HOST}:{SMARTHOST_PORT} (TLS: {SMARTHOST_TLS})")
             result['smarthost_used'] = True
             try:
                 if SMARTHOST_TLS == 'ssl':
                     smtp = smtplib.SMTP_SSL(SMARTHOST_HOST, SMARTHOST_PORT, timeout=30)
+                    smtp_conversation.append(f"CONNECT (SSL) -> {SMARTHOST_HOST}:{SMARTHOST_PORT}")
                     result['tls_used'] = True
                 else:
-                    smtp = smtplib.SMTP(SMARTHOST_HOST, SMARTHOST_PORT, timeout=30)
-                smtp.ehlo(SMTP_HOSTNAME)
+                    smtp = smtplib.SMTP(timeout=30)
+                    smtp_conversation.append(f"CONNECT -> {SMARTHOST_HOST}:{SMARTHOST_PORT}")
+                    code, msg_resp = smtp.connect(SMARTHOST_HOST, SMARTHOST_PORT)
+                    smtp_conversation.append(f"SERVER -> {code} {msg_resp.decode() if isinstance(msg_resp, bytes) else msg_resp}")
+
+                # Send EHLO and capture response
+                code, msg_resp = smtp.ehlo(SMTP_HOSTNAME)
+                smtp_conversation.append(f"EHLO {SMTP_HOSTNAME} -> {code}")
+                if code != 250:
+                    raise Exception(f"EHLO failed: {code} {msg_resp}")
+
                 if SMARTHOST_TLS == 'starttls':
-                    smtp.starttls()
-                    smtp.ehlo(SMTP_HOSTNAME)
+                    code, msg_resp = smtp.starttls()
+                    smtp_conversation.append(f"STARTTLS -> {code}")
+                    code, msg_resp = smtp.ehlo(SMTP_HOSTNAME)
+                    smtp_conversation.append(f"EHLO (after TLS) -> {code}")
                     result['tls_used'] = True
+
                 if SMARTHOST_USERNAME and SMARTHOST_PASSWORD:
                     smtp.login(SMARTHOST_USERNAME, SMARTHOST_PASSWORD)
                     smtp_conversation.append("AUTH -> OK")
-                smtp.sendmail(from_addr, [to_email], msg.as_bytes())
-                smtp_conversation.append(f"SEND -> OK")
+
+                # Use low-level commands for better control
+                code, msg_resp = smtp.mail(from_addr)
+                smtp_conversation.append(f"MAIL FROM:<{from_addr}> -> {code}")
+                code, msg_resp = smtp.rcpt(to_email)
+                smtp_conversation.append(f"RCPT TO:<{to_email}> -> {code}")
+                code, msg_resp = smtp.data(msg.as_bytes())
+                smtp_conversation.append(f"DATA -> {code}")
+
                 smtp.quit()
+                smtp_conversation.append("QUIT -> OK")
                 result['success'] = True
                 result['smtp_log'] = smtp_conversation
                 result['sent_at'] = datetime.now().isoformat()
                 result['relay_used'] = SMARTHOST_HOST
             except Exception as e:
+                logs.append(f"[CALLBACK] Smarthost failed: {str(e)}")
+                smtp_conversation.append(f"ERROR: {str(e)}")
                 result['error'] = str(e)
+                result['smtp_log'] = smtp_conversation
         else:
             domain = to_email.split('@')[1]
             mx_records = []
