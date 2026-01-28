@@ -306,13 +306,22 @@ def send_callback_email(to_email, callback_id, original_subject, smtp_logs):
                     smtp.login(SMARTHOST_USERNAME, SMARTHOST_PASSWORD)
                     smtp_conversation.append("AUTH -> OK")
 
-                # Use low-level commands for better control
+                # Use low-level commands for better control with error checking
+                logs.append(f"[CALLBACK] Sending from: {from_addr}")
                 code, msg_resp = smtp.mail(from_addr)
-                smtp_conversation.append(f"MAIL FROM:<{from_addr}> -> {code}")
+                smtp_conversation.append(f"MAIL FROM:<{from_addr}> -> {code} {msg_resp.decode() if isinstance(msg_resp, bytes) else msg_resp}")
+                if code != 250:
+                    raise Exception(f"MAIL FROM rejected: {code} {msg_resp}")
+
                 code, msg_resp = smtp.rcpt(to_email)
-                smtp_conversation.append(f"RCPT TO:<{to_email}> -> {code}")
+                smtp_conversation.append(f"RCPT TO:<{to_email}> -> {code} {msg_resp.decode() if isinstance(msg_resp, bytes) else msg_resp}")
+                if code not in (250, 251):
+                    raise Exception(f"RCPT TO rejected: {code} {msg_resp}")
+
                 code, msg_resp = smtp.data(msg.as_bytes())
-                smtp_conversation.append(f"DATA -> {code}")
+                smtp_conversation.append(f"DATA -> {code} {msg_resp.decode() if isinstance(msg_resp, bytes) else msg_resp}")
+                if code != 250:
+                    raise Exception(f"DATA rejected: {code} {msg_resp}")
 
                 smtp.quit()
                 smtp_conversation.append("QUIT -> OK")
