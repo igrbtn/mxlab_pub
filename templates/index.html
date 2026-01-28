@@ -62,7 +62,7 @@
             background: #1e293b;
             padding: 6px;
             border-radius: 12px;
-            max-width: 400px;
+            max-width: 500px;
             margin-left: auto;
             margin-right: auto;
         }
@@ -1260,6 +1260,198 @@
                 font-size: 0.85rem;
             }
         }
+
+        /* Exchange Connectivity Test Styles */
+        .exchange-form {
+            max-width: 500px;
+            margin: 0 auto;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        .form-group label {
+            display: block;
+            color: #94a3b8;
+            font-size: 0.9rem;
+            margin-bottom: 8px;
+        }
+
+        .radio-group, .checkbox-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .radio-label, .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            color: #e2e8f0;
+            font-size: 0.9rem;
+        }
+
+        .radio-label input, .checkbox-label input {
+            width: 18px;
+            height: 18px;
+            accent-color: #3b82f6;
+        }
+
+        .consent-group {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 24px;
+        }
+
+        .consent-checkbox span {
+            color: #fca5a5;
+        }
+
+        .exchange-results {
+            margin-top: 30px;
+            text-align: left;
+        }
+
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .results-header h3 {
+            color: #f8fafc;
+            margin: 0;
+        }
+
+        .results-summary {
+            display: flex;
+            gap: 16px;
+            font-size: 0.9rem;
+        }
+
+        .results-summary .pass { color: #22c55e; }
+        .results-summary .warning { color: #f59e0b; }
+        .results-summary .error { color: #ef4444; }
+
+        .results-progress {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px;
+            background: #0f172a;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            color: #94a3b8;
+        }
+
+        .results-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .step-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 14px;
+            background: #0f172a;
+            border-radius: 8px;
+            border-left: 3px solid #334155;
+        }
+
+        .step-item.success { border-left-color: #22c55e; }
+        .step-item.warning { border-left-color: #f59e0b; }
+        .step-item.error { border-left-color: #ef4444; }
+
+        .step-icon {
+            width: 20px;
+            height: 20px;
+            flex-shrink: 0;
+        }
+
+        .step-content {
+            flex: 1;
+        }
+
+        .step-name {
+            color: #f8fafc;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .step-message {
+            color: #94a3b8;
+            font-size: 0.85rem;
+        }
+
+        .step-time {
+            color: #64748b;
+            font-size: 0.8rem;
+            font-family: 'SF Mono', Monaco, monospace;
+        }
+
+        .autodiscover-xml {
+            margin-top: 20px;
+            background: #0f172a;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .xml-tabs {
+            display: flex;
+            border-bottom: 1px solid #334155;
+        }
+
+        .xml-tab {
+            padding: 10px 20px;
+            background: none;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        .xml-tab.active {
+            color: #3b82f6;
+            border-bottom: 2px solid #3b82f6;
+        }
+
+        .xml-content {
+            padding: 16px;
+            max-height: 400px;
+            overflow: auto;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.8rem;
+            color: #94a3b8;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .results-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        .btn-secondary {
+            background: #334155;
+            color: #e2e8f0;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-secondary:hover {
+            background: #475569;
+        }
     </style>
 </head>
 <body>
@@ -1287,6 +1479,7 @@
         <div class="main-tabs">
             <button class="main-tab active" onclick="showMainTab('mxtest')">MXtest</button>
             <button class="main-tab" onclick="showMainTab('tools')">MXlab Lookup</button>
+            <button class="main-tab" onclick="showMainTab('exchange')">ExchLookup</button>
         </div>
 
         <!-- MXtest Content -->
@@ -1383,6 +1576,111 @@
                     <!-- Report Checks -->
                     <div class="report-checks" id="reportChecks">
                         <!-- Checks will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ExchLookup Content -->
+        <div class="main-content" id="exchangeContent">
+            <div class="card tools-section">
+                <h2 style="margin-bottom: 20px; color: #f8fafc;">Exchange Connectivity Test</h2>
+                <p style="color: #94a3b8; margin-bottom: 24px;">Test Exchange/Office 365 connectivity like Microsoft Remote Connectivity Analyzer</p>
+
+                <div class="exchange-form">
+                    <div class="form-group">
+                        <label for="exchEmail">Email Address</label>
+                        <input type="email" id="exchEmail" class="tools-input" placeholder="user@domain.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="exchPassword">Password</label>
+                        <input type="password" id="exchPassword" class="tools-input" placeholder="Enter password">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Server Discovery</label>
+                        <div class="radio-group">
+                            <label class="radio-label">
+                                <input type="radio" name="serverMode" value="autodiscover" checked onchange="toggleManualServer()">
+                                <span>Use Autodiscover</span>
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="serverMode" value="manual" onchange="toggleManualServer()">
+                                <span>Manual server entry</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group" id="manualServerGroup" style="display: none;">
+                        <label for="exchServer">Server Address</label>
+                        <input type="text" id="exchServer" class="tools-input" placeholder="mail.domain.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Tests to Run</label>
+                        <div class="checkbox-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="testAutodiscover" checked>
+                                <span>Autodiscover</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="testEWS">
+                                <span>EWS (Exchange Web Services)</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="testActiveSync">
+                                <span>ActiveSync</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="testMapiHttp">
+                                <span>MAPI-HTTP</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="testAvailability">
+                                <span>Availability (Free/Busy)</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group consent-group">
+                        <label class="checkbox-label consent-checkbox">
+                            <input type="checkbox" id="exchConsent" onchange="toggleRunButton()">
+                            <span>I acknowledge this is a test account and will change password after testing</span>
+                        </label>
+                    </div>
+
+                    <button class="btn" id="runExchTest" onclick="runExchangeTest()" disabled>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;margin-right:8px;vertical-align:middle;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                        Run Connectivity Test
+                    </button>
+                </div>
+
+                <div class="exchange-results" id="exchangeResults" style="display: none;">
+                    <div class="results-header">
+                        <h3>Test Results</h3>
+                        <div class="results-summary" id="exchSummary"></div>
+                    </div>
+
+                    <div class="results-progress" id="exchProgress">
+                        <div class="spinner"></div>
+                        <span id="exchProgressText">Running tests...</span>
+                    </div>
+
+                    <div class="results-steps" id="exchSteps"></div>
+
+                    <div class="autodiscover-xml" id="autodiscoverXml" style="display: none;">
+                        <div class="xml-tabs">
+                            <button class="xml-tab active" onclick="showXmlTab('parsed')">Parsed</button>
+                            <button class="xml-tab" onclick="showXmlTab('raw')">Raw XML</button>
+                        </div>
+                        <div class="xml-content" id="xmlParsed"></div>
+                        <div class="xml-content" id="xmlRaw" style="display: none;"></div>
+                    </div>
+
+                    <div class="results-actions" id="exchActions" style="display: none;">
+                        <button class="btn btn-secondary" onclick="exportExchangeReport()">Export HTML</button>
+                        <a class="btn btn-secondary" id="exchReportLink" href="#" target="_blank" style="display: none;">View Report</a>
                     </div>
                 </div>
             </div>
@@ -1556,7 +1854,8 @@
             document.querySelectorAll('.main-content').forEach(c => c.classList.remove('active'));
 
             document.querySelector(`.main-tab[onclick="showMainTab('${tab}')"]`).classList.add('active');
-            document.getElementById(tab === 'mxtest' ? 'mxtestContent' : 'toolsContent').classList.add('active');
+            const contentId = tab === 'mxtest' ? 'mxtestContent' : (tab === 'tools' ? 'toolsContent' : 'exchangeContent');
+            document.getElementById(contentId).classList.add('active');
         }
 
         // Tool selection
@@ -2556,6 +2855,258 @@
 
         function toggleReportCheck(element) {
             element.closest('.report-check').classList.toggle('expanded');
+        }
+
+        // ============================================
+        // Exchange Connectivity Test Functions
+        // ============================================
+
+        function toggleManualServer() {
+            const mode = document.querySelector('input[name="serverMode"]:checked').value;
+            document.getElementById('manualServerGroup').style.display = mode === 'manual' ? 'block' : 'none';
+        }
+
+        function toggleRunButton() {
+            const consent = document.getElementById('exchConsent').checked;
+            document.getElementById('runExchTest').disabled = !consent;
+        }
+
+        function showXmlTab(tab) {
+            document.querySelectorAll('.xml-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.xml-content').forEach(c => c.style.display = 'none');
+
+            document.querySelector(`.xml-tab[onclick="showXmlTab('${tab}')"]`).classList.add('active');
+            document.getElementById(tab === 'parsed' ? 'xmlParsed' : 'xmlRaw').style.display = 'block';
+        }
+
+        let exchangeReportId = null;
+
+        async function runExchangeTest() {
+            const email = document.getElementById('exchEmail').value.trim();
+            const password = document.getElementById('exchPassword').value;
+            const useAutodiscover = document.querySelector('input[name="serverMode"]:checked').value === 'autodiscover';
+            const manualServer = document.getElementById('exchServer').value.trim();
+
+            if (!email || !password) {
+                alert('Please enter email and password');
+                return;
+            }
+
+            if (!email.includes('@')) {
+                alert('Please enter a valid email address');
+                return;
+            }
+
+            // Get selected tests
+            const tests = {
+                autodiscover: document.getElementById('testAutodiscover').checked,
+                ews: document.getElementById('testEWS').checked,
+                activesync: document.getElementById('testActiveSync').checked,
+                mapi_http: document.getElementById('testMapiHttp').checked,
+                availability: document.getElementById('testAvailability').checked
+            };
+
+            // Show results section
+            const resultsDiv = document.getElementById('exchangeResults');
+            resultsDiv.style.display = 'block';
+            document.getElementById('exchProgress').style.display = 'flex';
+            document.getElementById('exchSteps').innerHTML = '';
+            document.getElementById('autodiscoverXml').style.display = 'none';
+            document.getElementById('exchActions').style.display = 'none';
+            document.getElementById('exchSummary').innerHTML = '';
+            exchangeReportId = null;
+
+            try {
+                const response = await fetch('/api/exchange/test/stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: email,
+                        password: password,
+                        use_autodiscover: useAutodiscover,
+                        manual_server: manualServer,
+                        tests: tests
+                    })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    let eventType = '';
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.substring(7);
+                        } else if (line.startsWith('data: ') && eventType) {
+                            const data = JSON.parse(line.substring(6));
+                            handleExchangeEvent(eventType, data);
+                            eventType = '';
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Exchange test error:', error);
+                document.getElementById('exchProgressText').textContent = 'Error: ' + error.message;
+            }
+        }
+
+        function handleExchangeEvent(eventType, data) {
+            switch (eventType) {
+                case 'start':
+                    document.getElementById('exchProgressText').textContent = `Running ${data.tests_selected} test(s)...`;
+                    break;
+
+                case 'step':
+                    addExchangeStep(data);
+                    document.getElementById('exchProgressText').textContent = `Testing: ${data.name}`;
+                    break;
+
+                case 'autodiscover_xml':
+                    showAutodiscoverXml(data);
+                    break;
+
+                case 'complete':
+                    handleExchangeComplete(data);
+                    break;
+            }
+        }
+
+        function addExchangeStep(step) {
+            const stepsDiv = document.getElementById('exchSteps');
+            const statusIcon = step.status === 'success' ? icons.pass :
+                              step.status === 'warning' ? icons.warning : icons.fail;
+
+            const stepHtml = `
+                <div class="step-item ${step.status}">
+                    <div class="step-icon">${statusIcon}</div>
+                    <div class="step-content">
+                        <div class="step-name">${escapeHtml(step.name)}</div>
+                        <div class="step-message">${escapeHtml(step.message)}</div>
+                        ${step.details && step.details.url ? `<div class="step-time">${escapeHtml(step.details.url)}</div>` : ''}
+                    </div>
+                    <div class="step-time">${step.response_time_ms}ms</div>
+                </div>
+            `;
+            stepsDiv.innerHTML += stepHtml;
+        }
+
+        function showAutodiscoverXml(data) {
+            const xmlDiv = document.getElementById('autodiscoverXml');
+            xmlDiv.style.display = 'block';
+
+            // Parsed view
+            const parsedDiv = document.getElementById('xmlParsed');
+            if (data.parsed && !data.parsed.error) {
+                let html = '<div style="color: #22c55e; margin-bottom: 12px;">Autodiscover Response Parsed Successfully</div>';
+
+                if (data.parsed.user) {
+                    html += `<div style="margin-bottom: 12px;"><strong>User:</strong> ${escapeHtml(data.parsed.user.display_name || '')} (${escapeHtml(data.parsed.user.email || '')})</div>`;
+                }
+
+                if (data.parsed.protocols) {
+                    html += '<div><strong>Protocols:</strong></div>';
+                    for (const [proto, settings] of Object.entries(data.parsed.protocols)) {
+                        html += `<div style="margin-left: 16px; margin-top: 8px;">
+                            <div style="color: #3b82f6;">${escapeHtml(proto)}</div>`;
+                        for (const [key, value] of Object.entries(settings)) {
+                            if (value) {
+                                html += `<div style="margin-left: 16px; color: #64748b;">${escapeHtml(key)}: ${escapeHtml(String(value))}</div>`;
+                            }
+                        }
+                        html += '</div>';
+                    }
+                }
+                parsedDiv.innerHTML = html;
+            } else {
+                parsedDiv.innerHTML = '<div style="color: #f59e0b;">Could not parse Autodiscover response</div>';
+            }
+
+            // Raw view
+            const rawDiv = document.getElementById('xmlRaw');
+            if (data.raw) {
+                rawDiv.textContent = data.raw;
+            } else {
+                rawDiv.textContent = 'No raw XML available';
+            }
+        }
+
+        function handleExchangeComplete(data) {
+            document.getElementById('exchProgress').style.display = 'none';
+
+            const summary = data.summary;
+            document.getElementById('exchSummary').innerHTML = `
+                <span class="pass">✓ ${summary.passed}</span>
+                <span class="warning">! ${summary.warnings}</span>
+                <span class="error">✗ ${summary.errors}</span>
+                <span style="color: #94a3b8;">Score: ${summary.score}/100</span>
+            `;
+
+            document.getElementById('exchActions').style.display = 'flex';
+
+            if (data.report_id) {
+                exchangeReportId = data.report_id;
+                const reportLink = document.getElementById('exchReportLink');
+                reportLink.href = data.report_url;
+                reportLink.style.display = 'inline-flex';
+            }
+        }
+
+        function exportExchangeReport() {
+            const stepsHtml = document.getElementById('exchSteps').innerHTML;
+            const summaryHtml = document.getElementById('exchSummary').innerHTML;
+            const xmlParsed = document.getElementById('xmlParsed').innerHTML;
+            const xmlRaw = document.getElementById('xmlRaw').textContent;
+
+            const html = `<!DOCTYPE html>
+<html>
+<head>
+    <title>Exchange Connectivity Test Report</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 40px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: #f8fafc; }
+        .summary { margin: 20px 0; }
+        .step-item { padding: 14px; background: #1e293b; border-radius: 8px; margin: 8px 0; border-left: 3px solid #334155; }
+        .step-item.success { border-left-color: #22c55e; }
+        .step-item.warning { border-left-color: #f59e0b; }
+        .step-item.error { border-left-color: #ef4444; }
+        .xml-section { background: #1e293b; padding: 16px; border-radius: 8px; margin-top: 20px; }
+        pre { white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; }
+        .pass { color: #22c55e; }
+        .warning { color: #f59e0b; }
+        .error { color: #ef4444; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Exchange Connectivity Test Report</h1>
+        <p>Generated: ${new Date().toISOString()}</p>
+        <div class="summary">${summaryHtml}</div>
+        <h2>Test Steps</h2>
+        ${stepsHtml}
+        <h2>Autodiscover Response</h2>
+        <div class="xml-section">${xmlParsed}</div>
+        <h2>Raw XML</h2>
+        <div class="xml-section"><pre>${escapeHtml(xmlRaw)}</pre></div>
+    </div>
+</body>
+</html>`;
+
+            const blob = new Blob([html], { type: 'text/html' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `exchange-test-${Date.now()}.html`;
+            a.click();
+            URL.revokeObjectURL(url);
         }
     </script>
 </body>

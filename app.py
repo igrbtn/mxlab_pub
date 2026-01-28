@@ -24,6 +24,14 @@ from flask import Flask, render_template, jsonify, request
 from aiosmtpd.controller import Controller
 from aiosmtpd.smtp import SMTP as SMTPServer
 from pymongo import MongoClient
+import requests
+from requests.auth import HTTPBasicAuth
+try:
+    from requests_ntlm import HttpNtlmAuth
+    NTLM_AVAILABLE = True
+except ImportError:
+    NTLM_AVAILABLE = False
+import xml.etree.ElementTree as ET
 
 # Try to import optional analysis libraries
 try:
@@ -2535,6 +2543,338 @@ def tool_autodiscover_check(domain):
         results['message'] = 'Autodiscover not configured'
 
     return results
+
+
+# ============================================
+# Exchange Connectivity Test Functions
+# ============================================
+
+def parse_autodiscover_xml(xml_content):
+    """Parse Autodiscover XML response and extract protocol settings."""
+    try:
+        root = ET.fromstring(xml_content)
+        ns = {
+            'a': 'http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006',
+            'o': 'http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a'
+        }
+        result = {'user': {}, 'protocols': {}, 'settings': []}
+        account = root.find('.//o:Account', ns)
+        if account is not None:
+            user = account.find('o:User', ns)
+            if user is not None:
+                result['user']['display_name'] = user.findtext('o:DisplayName', '', ns)
+                result['user']['email'] = user.findtext('o:AutoDiscoverSMTPAddress', '', ns)
+            for protocol in account.findall('.//o:Protocol', ns):
+                proto_type = protocol.findtext('o:Type', '', ns)
+                proto_data = {
+                    'server': protocol.findtext('o:Server', '', ns),
+                    'ssl': protocol.findtext('o:SSL', '', ns),
+                    'port': protocol.findtext('o:Port', '', ns),
+                    'auth_package': protocol.findtext('o:AuthPackage', '', ns),
+                }
+                ews_url = protocol.findtext('o:EwsUrl', '', ns)
+                if ews_url: proto_data['ews_url'] = ews_url
+                as_url = protocol.findtext('o:ASUrl', '', ns)
+                if as_url: proto_data['activesync_url'] = as_url
+                if proto_type: result['protocols'][proto_type] = proto_data
+        return result
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def test_exchange_autodiscover(email, password, manual_server=None):
+    """Test Autodiscover connectivity for Exchange/Office 365."""
+    domain = email.split('@')[1] if '@' in email else email
+    steps = []
+    autodiscover_xml = None
+    autodiscover_parsed = None
+    autodiscover_url = None
+
+    # DNS SRV lookup
+    step = {'name': 'DNS SRV Lookup', 'test': 'autodiscover', 'status': 'error', 'response_time_ms': 0, 'message': ''}
+    start_time = datetime.now()
+    try:
+        if DNS_AVAILABLE:
+            resolver = create_resolver(use_cache=False)
+            answers = resolver.resolve(f'_autodiscover._tcp.{domain}', 'SRV')
+            srv_target = str(answers[0].target).rstrip('.')
+            step['status'] = 'success'
+            step['message'] = f'SRV record found: {srv_target}'
+        else:
+            step['status'] = 'warning'
+            step['message'] = 'DNS library not available'
+    except Exception as e:
+        step['status'] = 'warning'
+        step['message'] = f'No SRV record: {str(e)[:50]}'
+    step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
+    steps.append(step)
+
+    autodiscover_urls = [f'https://{manual_server}/autodiscover/autodiscover.xml'] if manual_server else [
+        f'https://autodiscover.{domain}/autodiscover/autodiscover.xml',
+        f'https://{domain}/autodiscover/autodiscover.xml',
+    ]
+    autodiscover_request = f'''<?xml version="1.0" encoding="utf-8"?>
+<Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/requestschema/2006">
+  <Request><EMailAddress>{email}</EMailAddress>
+    <AcceptableResponseSchema>http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a</AcceptableResponseSchema>
+  </Request>
+</Autodiscover>'''
+
+    for url in autodiscover_urls:
+        step = {'name': 'Autodiscover Request', 'test': 'autodiscover', 'status': 'error', 'response_time_ms': 0, 'message': '', 'details': {'url': url}}
+        start_time = datetime.now()
+        try:
+            auth = HTTPBasicAuth(email, password)
+            response = requests.post(url, data=autodiscover_request, auth=auth, headers={'Content-Type': 'text/xml'}, timeout=15, verify=True)
+            step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
+            step['details']['status_code'] = response.status_code
+            if response.status_code == 200:
+                step['status'] = 'success'
+                step['message'] = f'Autodiscover response received ({response.status_code})'
+                autodiscover_xml = response.text
+                autodiscover_url = url
+                autodiscover_parsed = parse_autodiscover_xml(autodiscover_xml)
+                steps.append(step)
+                break
+            elif response.status_code == 401:
+                if NTLM_AVAILABLE:
+                    try:
+                        ntlm_auth = HttpNtlmAuth(email, password)
+                        response = requests.post(url, data=autodiscover_request, auth=ntlm_auth, headers={'Content-Type': 'text/xml'}, timeout=15, verify=True)
+                        if response.status_code == 200:
+                            step['status'] = 'success'
+                            step['message'] = 'Autodiscover response received (NTLM auth)'
+                            autodiscover_xml = response.text
+                            autodiscover_url = url
+                            autodiscover_parsed = parse_autodiscover_xml(autodiscover_xml)
+                            steps.append(step)
+                            break
+                    except: pass
+                step['status'] = 'error'
+                step['message'] = 'Authentication failed (401)'
+            else:
+                step['status'] = 'error'
+                step['message'] = f'HTTP {response.status_code}'
+        except requests.exceptions.SSLError as e:
+            step['status'] = 'error'
+            step['message'] = f'SSL Error: {str(e)[:50]}'
+        except requests.exceptions.Timeout:
+            step['status'] = 'error'
+            step['message'] = 'Request timeout (15s)'
+        except Exception as e:
+            step['status'] = 'error'
+            step['message'] = str(e)[:50]
+        step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
+        steps.append(step)
+
+    return {'test': 'autodiscover', 'status': 'success' if autodiscover_xml else 'error', 'steps': steps,
+            'autodiscover_url': autodiscover_url, 'autodiscover_xml': autodiscover_xml, 'autodiscover_parsed': autodiscover_parsed,
+            'message': 'Autodiscover successful' if autodiscover_xml else 'Autodiscover failed'}
+
+
+def test_exchange_ews(email, password, autodiscover_result):
+    """Test Exchange Web Services connectivity."""
+    ews_url = 'https://outlook.office365.com/EWS/Exchange.asmx'
+    if autodiscover_result and autodiscover_result.get('autodiscover_parsed'):
+        for proto_data in autodiscover_result['autodiscover_parsed'].get('protocols', {}).values():
+            if proto_data.get('ews_url'): ews_url = proto_data['ews_url']; break
+
+    step = {'name': 'EWS GetFolder Request', 'test': 'ews', 'status': 'error', 'response_time_ms': 0, 'message': '', 'details': {'url': ews_url}}
+    ews_request = '''<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"><soap:Body><GetFolder xmlns="http://schemas.microsoft.com/exchange/services/2006/messages"><FolderShape><t:BaseShape>Default</t:BaseShape></FolderShape><FolderIds><t:DistinguishedFolderId Id="inbox"/></FolderIds></GetFolder></soap:Body></soap:Envelope>'''
+    start_time = datetime.now()
+    try:
+        response = requests.post(ews_url, data=ews_request, auth=HTTPBasicAuth(email, password),
+                                 headers={'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '"http://schemas.microsoft.com/exchange/services/2006/messages/GetFolder"'}, timeout=15, verify=True)
+        step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
+        step['details']['status_code'] = response.status_code
+        if response.status_code == 200 and ('GetFolderResponse' in response.text or 'Inbox' in response.text):
+            step['status'] = 'success'
+            step['message'] = 'EWS GetFolder successful - Inbox accessible'
+        elif response.status_code == 401:
+            step['status'] = 'error'
+            step['message'] = 'Authentication failed (401)'
+        else:
+            step['status'] = 'error'
+            step['message'] = f'HTTP {response.status_code}'
+    except Exception as e:
+        step['status'] = 'error'
+        step['message'] = str(e)[:50]
+    return {'test': 'ews', 'status': step['status'], 'steps': [step], 'message': step['message']}
+
+
+def test_exchange_activesync(email, password, autodiscover_result):
+    """Test Exchange ActiveSync connectivity."""
+    as_url = 'https://outlook.office365.com/Microsoft-Server-ActiveSync'
+    step = {'name': 'ActiveSync OPTIONS', 'test': 'activesync', 'status': 'error', 'response_time_ms': 0, 'message': '', 'details': {'url': as_url}}
+    start_time = datetime.now()
+    try:
+        response = requests.options(as_url, auth=HTTPBasicAuth(email, password), timeout=15, verify=True)
+        step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
+        step['details']['status_code'] = response.status_code
+        ms_server = response.headers.get('MS-Server-ActiveSync', '')
+        if response.status_code == 200:
+            step['status'] = 'success'
+            step['message'] = f'ActiveSync available (v{ms_server})'
+        elif response.status_code == 401:
+            step['status'] = 'error'
+            step['message'] = 'Authentication failed (401)'
+        else:
+            step['status'] = 'warning'
+            step['message'] = f'HTTP {response.status_code}'
+    except Exception as e:
+        step['status'] = 'error'
+        step['message'] = str(e)[:50]
+    return {'test': 'activesync', 'status': step['status'], 'steps': [step], 'message': step['message']}
+
+
+def test_exchange_mapi_http(email, password, autodiscover_result):
+    """Test MAPI over HTTP connectivity."""
+    mapi_url = 'https://outlook.office365.com/mapi/emsmdb/'
+    step = {'name': 'MAPI-HTTP Connect', 'test': 'mapi_http', 'status': 'error', 'response_time_ms': 0, 'message': '', 'details': {'url': mapi_url}}
+    start_time = datetime.now()
+    try:
+        response = requests.post(mapi_url, auth=HTTPBasicAuth(email, password), headers={'Content-Type': 'application/mapi-http', 'X-RequestType': 'Connect'}, timeout=15, verify=True)
+        step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
+        step['details']['status_code'] = response.status_code
+        if response.status_code == 200:
+            step['status'] = 'success'
+            step['message'] = 'MAPI-HTTP endpoint accessible'
+        elif response.status_code == 401:
+            step['status'] = 'error'
+            step['message'] = 'Authentication failed (401)'
+        else:
+            step['status'] = 'warning'
+            step['message'] = f'HTTP {response.status_code}'
+    except Exception as e:
+        step['status'] = 'error'
+        step['message'] = str(e)[:50]
+    return {'test': 'mapi_http', 'status': step['status'], 'steps': [step], 'message': step['message']}
+
+
+def test_exchange_availability(email, password, autodiscover_result):
+    """Test Exchange Availability Service."""
+    ews_url = 'https://outlook.office365.com/EWS/Exchange.asmx'
+    step = {'name': 'Availability Service', 'test': 'availability', 'status': 'error', 'response_time_ms': 0, 'message': '', 'details': {'url': ews_url}}
+    now = datetime.utcnow()
+    availability_request = f'''<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"><soap:Body><GetUserAvailabilityRequest xmlns="http://schemas.microsoft.com/exchange/services/2006/messages"><t:TimeZone><t:Bias>0</t:Bias></t:TimeZone><MailboxDataArray><t:MailboxData><t:Email><t:Address>{email}</t:Address></t:Email><t:AttendeeType>Required</t:AttendeeType></t:MailboxData></MailboxDataArray><t:FreeBusyViewOptions><t:TimeWindow><t:StartTime>{now.strftime('%Y-%m-%dT00:00:00')}</t:StartTime><t:EndTime>{(now + timedelta(days=1)).strftime('%Y-%m-%dT00:00:00')}</t:EndTime></t:TimeWindow><t:RequestedView>FreeBusy</t:RequestedView></t:FreeBusyViewOptions></GetUserAvailabilityRequest></soap:Body></soap:Envelope>'''
+    start_time = datetime.now()
+    try:
+        response = requests.post(ews_url, data=availability_request, auth=HTTPBasicAuth(email, password),
+                                 headers={'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '"http://schemas.microsoft.com/exchange/services/2006/messages/GetUserAvailability"'}, timeout=15, verify=True)
+        step['response_time_ms'] = int((datetime.now() - start_time).total_seconds() * 1000)
+        step['details']['status_code'] = response.status_code
+        if response.status_code == 200 and 'FreeBusyView' in response.text:
+            step['status'] = 'success'
+            step['message'] = 'Availability service working'
+        elif response.status_code == 401:
+            step['status'] = 'error'
+            step['message'] = 'Authentication failed (401)'
+        else:
+            step['status'] = 'error'
+            step['message'] = f'HTTP {response.status_code}'
+    except Exception as e:
+        step['status'] = 'error'
+        step['message'] = str(e)[:50]
+    return {'test': 'availability', 'status': step['status'], 'steps': [step], 'message': step['message']}
+
+
+async def send_telegram_exchange_notification(domain, summary, client_ip, report_id=None):
+    """Send notification about Exchange connectivity test."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
+    try:
+        score = summary.get('score', 0)
+        emoji = "✅" if score >= 80 else "👍" if score >= 60 else "⚠️" if score >= 40 else "❌"
+        status = "EXCELLENT" if score >= 80 else "GOOD" if score >= 60 else "FAIR" if score >= 40 else "POOR"
+        message = f"""{emoji} <b>ExchLookup Test</b>\n\n<b>Domain:</b> <code>{domain}</code>\n<b>Score:</b> {score}/100 — {status}\n<b>Tests:</b> {', '.join(summary.get('tests_run', []))}\n<b>Results:</b> ✅ {summary.get('passed', 0)} | ⚠️ {summary.get('warnings', 0)} | ❌ {summary.get('errors', 0)}\n<b>Client IP:</b> <code>{client_ip}</code>"""
+        if report_id: message += f"\n\n🔗 <a href=\"https://{DOMAIN}/report/{report_id}\">View Report</a>"
+        async with aiohttp.ClientSession() as session:
+            await session.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'HTML', 'disable_notification': True})
+    except Exception as e:
+        print(f"[TELEGRAM] Error: {e}")
+
+
+@app.route('/api/exchange/test/stream', methods=['POST'])
+def exchange_test_stream():
+    """Stream Exchange connectivity test results using Server-Sent Events."""
+    from flask import Response
+    data = request.get_json() or {}
+    email = data.get('email', '').strip()
+    password = data.get('password', '')
+    use_autodiscover = data.get('use_autodiscover', True)
+    manual_server = data.get('manual_server', '').strip() if not use_autodiscover else None
+    tests_config = data.get('tests', {})
+    client_ip = request.headers.get('X-Forwarded-For', request.headers.get('X-Real-IP', request.remote_addr))
+    if client_ip and ',' in client_ip: client_ip = client_ip.split(',')[0].strip()
+    if not email or not password: return jsonify({'error': 'Email and password are required'}), 400
+    if '@' not in email: return jsonify({'error': 'Invalid email format'}), 400
+    domain = email.split('@')[1]
+
+    def generate():
+        def send_event(event_type, event_data):
+            return f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
+        tests_to_run = []
+        if tests_config.get('autodiscover', True): tests_to_run.append('autodiscover')
+        if tests_config.get('ews', False): tests_to_run.append('ews')
+        if tests_config.get('activesync', False): tests_to_run.append('activesync')
+        if tests_config.get('mapi_http', False): tests_to_run.append('mapi_http')
+        if tests_config.get('availability', False): tests_to_run.append('availability')
+        if not tests_to_run: tests_to_run = ['autodiscover']
+
+        yield send_event('start', {'email_domain': domain, 'tests_selected': len(tests_to_run), 'timestamp': datetime.now().isoformat()})
+        all_results = {}
+        all_steps = []
+        autodiscover_result = None
+
+        if 'autodiscover' in tests_to_run:
+            autodiscover_result = test_exchange_autodiscover(email, password, manual_server)
+            all_results['autodiscover'] = autodiscover_result
+            for step in autodiscover_result.get('steps', []):
+                yield send_event('step', step)
+                all_steps.append(step)
+            if autodiscover_result.get('autodiscover_xml'):
+                yield send_event('autodiscover_xml', {'parsed': autodiscover_result.get('autodiscover_parsed'), 'raw': autodiscover_result.get('autodiscover_xml')})
+
+        test_functions = {'ews': test_exchange_ews, 'activesync': test_exchange_activesync, 'mapi_http': test_exchange_mapi_http, 'availability': test_exchange_availability}
+        for test_name in tests_to_run:
+            if test_name == 'autodiscover': continue
+            func = test_functions.get(test_name)
+            if func:
+                result = func(email, password, autodiscover_result)
+                all_results[test_name] = result
+                for step in result.get('steps', []):
+                    yield send_event('step', step)
+                    all_steps.append(step)
+
+        passed = sum(1 for s in all_steps if s['status'] == 'success')
+        warnings = sum(1 for s in all_steps if s['status'] == 'warning')
+        errors = sum(1 for s in all_steps if s['status'] == 'error')
+        total = len(all_steps)
+        score = round((passed / total) * 100) if total > 0 else 0
+        summary = {'total': total, 'passed': passed, 'warnings': warnings, 'errors': errors, 'score': score, 'tests_run': tests_to_run}
+
+        report_id = None
+        if MONGO_AVAILABLE and reports_collection is not None:
+            try:
+                report_id = f"exchange_{domain}_{int(datetime.now().timestamp())}"
+                report_doc = {'_id': report_id, 'type': 'exchange_test', 'email_domain': domain, 'timestamp': datetime.now().isoformat(), 'tests_run': tests_to_run, 'results': all_results, 'summary': summary}
+                if autodiscover_result and autodiscover_result.get('autodiscover_xml'): report_doc['autodiscover_xml'] = autodiscover_result['autodiscover_xml']
+                reports_collection.insert_one(report_doc)
+            except Exception as e:
+                print(f"[MONGO] Error: {e}")
+
+        import threading
+        def send_notification():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(send_telegram_exchange_notification(domain, summary, client_ip, report_id))
+            loop.close()
+        threading.Thread(target=send_notification, daemon=True).start()
+
+        complete_data = {'summary': summary, 'timestamp': datetime.now().isoformat()}
+        if report_id: complete_data['report_id'] = report_id; complete_data['report_url'] = f"/report/{report_id}"
+        yield send_event('complete', complete_data)
+
+    return Response(generate(), mimetype='text/event-stream', headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no'})
 
 
 @app.route('/api/tools/report/stream')
