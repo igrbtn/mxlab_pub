@@ -13,7 +13,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DOMAIN=${DOMAIN:-localhost}
-      - SMTP_HOSTNAME=${SMTP_HOSTNAME:-${DOMAIN:-localhost}}
+      - SMTP_HOSTNAME=${SMTP_HOSTNAME:-localhost}
       - SMTP_PORT=25
       - WEB_PORT=5000
       - TLS_ENABLED=true
@@ -25,6 +25,7 @@ services:
       - SMARTHOST_USERNAME=${SMARTHOST_USERNAME:-}
       - SMARTHOST_PASSWORD=${SMARTHOST_PASSWORD:-}
       - SMARTHOST_TLS=${SMARTHOST_TLS:-starttls}
+      - SMARTHOST_FROM=${SMARTHOST_FROM:-}
     env_file:
       - .env
     volumes:
